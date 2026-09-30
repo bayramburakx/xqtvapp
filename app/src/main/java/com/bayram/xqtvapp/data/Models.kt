@@ -30,3 +30,20 @@ data class SessionData(
     val vod: List<StalkerChannel>,
     val categories: List<StalkerCategory>
 )
+
+data class EpisodeEntry(
+    val id: String,
+    val season: Int,
+    val episode: Int,
+    val title: String,
+    val url: String,
+    val cover: String
+)
+
+data class SeriesEntry(
+    val id: String,
+    val name: String,
+    val cover: String,
+    val category: String,
+    val episodes: List<EpisodeEntry> = emptyList()
+)
