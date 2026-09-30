@@ -91,7 +91,7 @@ data class Session(
     val xPass: String = ""
 )
 
-private data class PlayReq(val title: String, val url: String, val altUrl: String?)
+data class PlayReq(val title: String, val url: String, val altUrl: String?)
 
 @Composable
 fun AppNav() {
