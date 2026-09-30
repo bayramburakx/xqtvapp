@@ -1,7 +1,7 @@
 name: Build APK
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -16,8 +16,12 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept licenses & install platform 34
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Install Gradle 8.7
         run: |
@@ -26,7 +30,7 @@ jobs:
           echo "/tmp/gradle-8.7/bin" >> $GITHUB_PATH
 
       - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
