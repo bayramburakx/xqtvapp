@@ -110,7 +110,7 @@ fun PortalScreen(onConnect: (String, String, List<StalkerChannel>) -> Unit) {
                     loading = true; error = ""
                     try {
                         val c = StalkerClient(url.trim(), mac.trim())
-                        if (!c.handshake()) { error = "Handshake başarısız. URL/MAC kontrol et." }
+                        if (!c.handshake()) { error = "Handshake başarısız: ${c.lastError.ifBlank { "URL/MAC kontrol et." }}" }
                         else {
                             val list = c.getChannels()
                             if (list.isEmpty()) error = "Bağlandı ama kanal listesi boş."
