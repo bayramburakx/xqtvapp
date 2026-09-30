@@ -125,4 +125,60 @@ class XtreamClient(
         }
         return out
     }
+
+    suspend fun seriesCategories() = categories("get_series_categories")
+
+    suspend fun seriesList(): List<SeriesEntry> {
+        val cats = seriesCategories()
+        val arr = getArray("player_api.php?${u()}&action=get_series")
+        val out = mutableListOf<SeriesEntry>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val id = o.optString("series_id")
+            if (id.isEmpty()) continue
+            out.add(
+                SeriesEntry(
+                    id = id,
+                    name = o.optString("name", "Series $id"),
+                    cover = o.optString("cover", ""),
+                    category = cats[o.optString("category_id")] ?: "Series"
+                )
+            )
+        }
+        return out
+    }
+
+    suspend fun seriesEpisodes(seriesId: String): SeriesEntry? {
+        val js = get("player_api.php?${u()}&action=get_series_info&series_id=$seriesId")
+            ?: return null
+        val info = js.optJSONObject("info") ?: return null
+        val eps = js.optJSONObject("episodes") ?: return null
+        val cover = info.optString("cover", "")
+        val name = info.optString("name", "")
+        val list = mutableListOf<EpisodeEntry>()
+        val seasons = eps.keys()
+        while (seasons.hasNext()) {
+            val sKey = seasons.next()
+            val seasonNum = sKey.toIntOrNull() ?: continue
+            val arr = eps.optJSONArray(sKey) ?: continue
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("id")
+                if (id.isEmpty()) continue
+                val ext = o.optString("container_extension", "mp4")
+                val epNum = o.optString("episode_num", "${i + 1}").toIntOrNull() ?: (i + 1)
+                val title = o.optString("title", "Bölüm $epNum").ifBlank { "Bölüm $epNum" }
+                list.add(
+                    EpisodeEntry(
+                        id = id, season = seasonNum, episode = epNum,
+                        title = title,
+                        url = "$server/series/$username/$password/$id.$ext",
+                        cover = cover
+                    )
+                )
+            }
+        }
+        list.sortWith(compareBy({ it.season }, { it.episode }))
+        return SeriesEntry(seriesId, name, cover, "", list)
+    }
 }
