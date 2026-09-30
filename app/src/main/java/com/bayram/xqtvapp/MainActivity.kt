@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
 
 // ---------- Navigation ----------
 
-private data class Session(
+data class Session(
     val label: String,
     val channels: List<StalkerChannel>,
     val vod: List<StalkerChannel>,
