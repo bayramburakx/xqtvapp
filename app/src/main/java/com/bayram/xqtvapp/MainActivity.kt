@@ -1,5 +1,6 @@
 package com.bayram.xqtvapp
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,7 +27,7 @@ import com.bayram.xqtvapp.data.StalkerClient
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-val androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences>.dataStore by preferencesDataStore("portal")
+val Context.dataStore by preferencesDataStore("portal")
 
 val KEY_URL = stringPreferencesKey("portal_url")
 val KEY_MAC = stringPreferencesKey("portal_mac")
