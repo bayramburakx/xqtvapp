@@ -1,10 +1,15 @@
 package com.bayram.xqtvapp.data
 
+enum class SourceType { STALKER, XTREAM, M3U }
+
 data class PortalConfig(
     val portalUrl: String = "",
     val mac: String = ""
 )
 
+// Tum kaynaklar icin ortak medya modeli:
+// - Canli TV: cmd = stalker komutu ya da direkt stream URL'i
+// - VOD: cmd = direkt stream URL'i
 data class StalkerChannel(
     val id: String,
     val name: String,
@@ -16,4 +21,12 @@ data class StalkerChannel(
 data class StalkerCategory(
     val id: String,
     val title: String
+)
+
+data class SessionData(
+    val type: SourceType,
+    val label: String,
+    val channels: List<StalkerChannel>,
+    val vod: List<StalkerChannel>,
+    val categories: List<StalkerCategory>
 )
