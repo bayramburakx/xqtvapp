@@ -181,4 +181,23 @@ class XtreamClient(
         list.sortWith(compareBy({ it.season }, { it.episode }))
         return SeriesEntry(seriesId, name, cover, "", list)
     }
+
+    /** Film detayi: puan, konu, oyuncu kadrosu (Xtream get_vod_info). */
+    suspend fun vodInfo(streamId: String): VodDetail? {
+        val js = get("player_api.php?${u()}&action=get_vod_info&vod_id=$streamId")
+            ?: return null
+        val info = js.optJSONObject("info") ?: return null
+        val md = js.optJSONObject("movie_data") ?: JSONObject()
+        return VodDetail(
+            name = info.optString("name", md.optString("name", "")),
+            plot = info.optString("plot", md.optString("plot", "")),
+            rating = info.optString("rating", md.optString("rating", "")),
+            year = info.optString("releasedate", md.optString("releasedate", "")).take(4),
+            genre = info.optString("genre", md.optString("genre", "")),
+            duration = info.optString("duration", md.optString("duration", "")),
+            cast = info.optString("actors", md.optString("actors", md.optString("cast", ""))),
+            director = info.optString("director", md.optString("director", "")),
+            cover = info.optString("movie_image", md.optString("movie_image", ""))
+        )
+    }
 }
