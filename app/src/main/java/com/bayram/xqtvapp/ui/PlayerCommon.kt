@@ -2,12 +2,13 @@ package com.bayram.xqtvapp.ui
 
 import android.content.Context
 import androidx.media3.common.MediaItem
-import androidx.media3.datasource.DefaultBandwidthMeter
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import androidx.media3.common.C
+import androidx.media3.common.TrackSelectionOverride
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,9 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.media3.common.C
-import androidx.media3.common.TrackSelectionOverride
-import androidx.media3.exoplayer.ExoPlayer
 
 fun fmtMs(ms: Long): String {
     if (ms < 0) return "00:00"
@@ -45,13 +43,11 @@ object PlayerBackend {
     private const val UA = "Mozilla/5.0 (Linux; Android 13; XqTV) AppleWebKit/537.36 Chrome/120 Safari/537.36"
 
     fun build(context: Context, url: String, isLive: Boolean): ExoPlayer {
-        val bandwidthMeter = DefaultBandwidthMeter.Builder(context).build()
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(UA)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
             .setAllowCrossProtocolRedirects(true)
-            .setTransferListener(bandwidthMeter)
 
         val loadControl = if (isLive) {
             DefaultLoadControl.Builder()
@@ -69,7 +65,6 @@ object PlayerBackend {
 
         return ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
-            .setBandwidthMeter(bandwidthMeter)
             .setLoadControl(loadControl)
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
