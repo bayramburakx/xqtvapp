@@ -47,3 +47,15 @@ data class SeriesEntry(
     val category: String,
     val episodes: List<EpisodeEntry> = emptyList()
 )
+
+data class VodDetail(
+    val name: String,
+    val plot: String,
+    val rating: String,
+    val year: String,
+    val genre: String,
+    val duration: String,
+    val cast: String,
+    val director: String,
+    val cover: String
+)
