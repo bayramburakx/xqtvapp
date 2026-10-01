@@ -276,7 +276,7 @@ fun LoginScreen(onDone: (Session) -> Unit) {
 // ==================== ANA EKRAN ====================
 
 private enum class MainTab(val title: String, val icon: ImageVector) {
-    HOME("Keşfet", Home), TV("Canlı", Tv), MOVIES("Film", Movie), SERIES("Dizi", PlayArrow), SEARCH("Ara", Search)
+    HOME("Keşfet", Icons.Filled.Home), TV("Canlı", Icons.Filled.Tv), MOVIES("Film", Icons.Filled.Movie), SERIES("Dizi", Icons.Filled.PlayArrow), SEARCH("Ara", Icons.Filled.Search)
 }
 
 @Composable
