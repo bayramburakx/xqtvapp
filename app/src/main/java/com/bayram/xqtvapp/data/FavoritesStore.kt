@@ -14,9 +14,7 @@ private val KEY_RECENT = stringPreferencesKey("recent_v2")
 val KEY_AUTOPLAY = booleanPreferencesKey("autoplay_next")
 
 private const val FS = "\u001F"
-"
 private const val RS = "\u001E"
-"
 
 /**
  * kayit formati: id|title|url|logo|posMs|durMs|kind|seriesTitle|epIdx
