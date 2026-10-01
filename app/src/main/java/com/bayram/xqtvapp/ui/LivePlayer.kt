@@ -29,6 +29,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.bayram.xqtvapp.PlayReq
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val LiveRed = Color(0xFFE50914)
 private val LiveResizeNames = listOf("Sığdır", "Doldur", "Zoom")
@@ -66,11 +67,12 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
         view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
     }
+    val errScope = rememberCoroutineScope()
 
     val exo = remember(currentUrl, retryKey) {
         errorMsg = null; buffering = true; playing = true
         try {
-            PlayerBackend.build(ctx, currentUrl, isLive = true).apply {
+            PlayerBackend.build(ctx, currentUrl, isLive = true, req.headers).apply {
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
                         buffering = state == Player.STATE_BUFFERING
@@ -86,7 +88,12 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
                             retryKey++
                         } else {
                             buffering = false; playing = false
-                            errorMsg = "Yayın açılamadı (${error.errorCodeName})"
+                            val base = "Yayın açılamadı (${error.errorCodeName})"
+                            errorMsg = base
+                            errScope.launch {
+                                val st = PlayerBackend.probeStatus(currentUrl, req.headers)
+                                errorMsg = "$base • Sunucu: $st"
+                            }
                         }
                     }
                 })
