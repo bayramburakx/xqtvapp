@@ -7,6 +7,11 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 import androidx.media3.common.C
 import androidx.media3.common.TrackSelectionOverride
 import androidx.compose.foundation.background
@@ -42,12 +47,13 @@ private data class TrackOpt(val groupIdx: Int, val trackIdx: Int, val label: Str
 object PlayerBackend {
     private const val UA = "Mozilla/5.0 (Linux; Android 13; XqTV) AppleWebKit/537.36 Chrome/120 Safari/537.36"
 
-    fun build(context: Context, url: String, isLive: Boolean): ExoPlayer {
+    fun build(context: Context, url: String, isLive: Boolean, headers: Map<String, String> = emptyMap()): ExoPlayer {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(UA)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
             .setAllowCrossProtocolRedirects(true)
+        if (headers.isNotEmpty()) httpFactory.setDefaultRequestProperties(headers)
 
         val loadControl = if (isLive) {
             DefaultLoadControl.Builder()
@@ -73,6 +79,29 @@ object PlayerBackend {
                 setMediaItem(MediaItem.fromUri(url))
             }
     }
+
+    private val probeClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+    }
+
+    /** Hata aninda sunucunun gercek HTTP cevabini olc (tani icin). Or: "HTTP 403". */
+    suspend fun probeStatus(url: String, headers: Map<String, String> = emptyMap()): String =
+        withContext(Dispatchers.IO) {
+            try {
+                val rb = Request.Builder().url(url).head()
+                    .header("User-Agent", UA)
+                headers.forEach { (k, v) -> rb.header(k, v) }
+                probeClient.newCall(rb.build()).execute().use { resp ->
+                    "HTTP ${resp.code}"
+                }
+            } catch (e: Exception) {
+                "ulaşılamadı (${e.message?.take(60)})"
+            }
+        }
 }
 
 @Composable
