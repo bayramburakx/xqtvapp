@@ -1,8 +1,11 @@
 package com.bayram.xqtvapp
 
+import android.app.Activity
 import android.content.Context
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -48,6 +51,12 @@ import coil.compose.AsyncImage
 import com.bayram.xqtvapp.data.EpisodeEntry
 import com.bayram.xqtvapp.data.FavoritesStore
 import com.bayram.xqtvapp.data.M3uParser
+import com.bayram.xqtvapp.data.clearSavedSources
+import com.bayram.xqtvapp.data.loadM3uSession
+import com.bayram.xqtvapp.data.loadStalkerSession
+import com.bayram.xqtvapp.data.loadXtreamSession
+import com.bayram.xqtvapp.data.markLastSource
+import com.bayram.xqtvapp.data.tryAutoLogin
 import com.bayram.xqtvapp.data.SeriesEntry
 import com.bayram.xqtvapp.data.StalkerChannel
 import com.bayram.xqtvapp.data.StalkerClient
@@ -109,7 +118,8 @@ data class PlayReq(
     val episodeIndex: Int = -1,
     val isLive: Boolean = false,
     val startMs: Long = 0L,
-    val resumeId: String = ""
+    val resumeId: String = "",
+    val headers: Map<String, String> = emptyMap()
 )
 
 @Composable
@@ -120,15 +130,40 @@ fun AppNav() {
     var play by remember { mutableStateOf<PlayReq?>(null) }
     var movieDetail by remember { mutableStateOf<StalkerChannel?>(null) }
     var seriesDetail by remember { mutableStateOf<SeriesEntry?>(null) }
+    var booting by remember { mutableStateOf(true) }
+    var bootError by remember { mutableStateOf<String?>(null) }
+    var bootCancelled by remember { mutableStateOf(false) }
 
-    fun openPlay(ch: StalkerChannel, url: String, alt: String?, startMs: Long = 0L) {
-        scope.launch { FavoritesStore.pushRecent(ctx, ch, kind = "live") }
-        play = PlayReq(ch.name, url, alt, isLive = true, startMs = startMs, resumeId = ch.id)
+    // kayitli oturum varsa uygulamayi direkt iceride ac
+    LaunchedEffect(Unit) {
+        try {
+            val s = tryAutoLogin(ctx)
+            if (!bootCancelled) session = s
+        } catch (e: Exception) {
+            val msg = e.message ?: ""
+            if (msg != "kayıtlı oturum yok" && msg != "kayıt eksik") bootError = msg
+        }
+        if (!bootCancelled) booting = false
     }
 
-    fun openMoviePlay(movie: StalkerChannel, url: String, startMs: Long = 0L) {
+    fun fullLogout() {
+        scope.launch {
+            clearSavedSources(ctx)
+            session = null
+            movieDetail = null
+            seriesDetail = null
+            play = null
+        }
+    }
+
+    fun openPlay(ch: StalkerChannel, url: String, alt: String?, headers: Map<String, String> = emptyMap(), startMs: Long = 0L) {
+        scope.launch { FavoritesStore.pushRecent(ctx, ch, kind = "live") }
+        play = PlayReq(ch.name, url, alt, isLive = true, startMs = startMs, resumeId = ch.id, headers = headers)
+    }
+
+    fun openMoviePlay(movie: StalkerChannel, url: String, startMs: Long = 0L, headers: Map<String, String> = emptyMap()) {
         scope.launch { FavoritesStore.pushRecent(ctx, movie, kind = "movie") }
-        play = PlayReq(movie.name, url, null, isLive = false, startMs = startMs, resumeId = movie.id)
+        play = PlayReq(movie.name, url, null, isLive = false, startMs = startMs, resumeId = movie.id, headers = headers)
     }
 
     fun openEpisode(seriesName: String, cover: String, episodes: List<EpisodeEntry>, idx: Int, startMs: Long = 0L) {
@@ -147,26 +182,60 @@ fun AppNav() {
     }
 
     when {
+        booting && !bootCancelled -> SplashScreen(
+            error = bootError,
+            onCancel = { bootCancelled = true; booting = false }
+        )
         play != null -> PlayerScreen(req = play!!, onBack = { play = null })
         movieDetail != null -> MovieDetailScreen(
             movie = movieDetail!!, session = session!!,
             onBack = { movieDetail = null },
             onSelect = { movieDetail = it },
-            onPlay = { url, ms -> openMoviePlay(movieDetail!!, url, ms) }
+            onPlay = { url, ms, h -> openMoviePlay(movieDetail!!, url, ms, h) }
         )
         seriesDetail != null -> SeriesDetailScreen(
             entry = seriesDetail!!, session = session!!,
             onBack = { seriesDetail = null },
             onPlayEpisode = { name, cover, eps, idx, ms -> openEpisode(name, cover, eps, idx, ms) }
         )
-        session == null -> LoginScreen(onDone = { session = it })
+        session == null -> LoginScreen(onDone = { session = it; bootError = null })
         else -> HomeScreen(
             session = session!!,
-            onLogout = { session = null },
-            onPlayChannel = { ch, url, alt -> openPlay(ch, url, alt) },
+            onLogout = { fullLogout() },
+            onPlayChannel = { ch, url, alt, h -> openPlay(ch, url, alt, h) },
             onOpenMovie = { movieDetail = it },
             onOpenSeries = { seriesDetail = it }
         )
+    }
+}
+
+// ==================== AÇILIŞ ====================
+
+@Composable
+fun SplashScreen(error: String?, onCancel: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(Bg).padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(Modifier.size(72.dp).clip(RoundedCornerShape(20.dp)).background(AccentRed),
+            contentAlignment = Alignment.Center) {
+            Text("X", color = Color.White, fontWeight = FontWeight.Black, fontSize = 38.sp)
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("XqTV", fontSize = 30.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(12.dp))
+        if (error.isNullOrBlank()) {
+            CircularProgressIndicator(color = Color.White)
+            Spacer(Modifier.height(8.dp))
+            Text("Son oturum açılıyor...", color = Color.Gray, fontSize = 13.sp)
+        } else {
+            Text(error, color = Color(0xFFFF9A9A), fontSize = 13.sp)
+        }
+        Spacer(Modifier.height(20.dp))
+        OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(12.dp)) {
+            Text("Farklı hesapla giriş yap")
+        }
     }
 }
 
@@ -255,47 +324,29 @@ fun LoginScreen(onDone: (Session) -> Unit) {
                         try {
                             when (tab) {
                                 0 -> {
-                                    val c = StalkerClient(sUrl.trim(), sMac.trim())
-                                    if (!c.handshake()) error = "Bağlanamadı: ${c.lastError.ifBlank { "URL/MAC kontrol et" }}"
-                                    else {
-                                        val ch = c.getChannels()
-                                        if (ch.isEmpty()) error = "Bağlandı ama liste boş bulundu"
-                                        else {
-                                            val vod = c.getVod(5)
-                                            ctx.dataStore.edit { it[KEY_S_URL] = sUrl.trim(); it[KEY_S_MAC] = sMac.trim() }
-                                            onDone(Session("Stalker", ch, vod, emptyList(), sUrl.trim(), sMac.trim()))
-                                        }
-                                    }
+                                    val s = loadStalkerSession(sUrl, sMac)
+                                    ctx.dataStore.edit { it[KEY_S_URL] = sUrl.trim(); it[KEY_S_MAC] = sMac.trim() }
+                                    markLastSource(ctx, "stalker")
+                                    onDone(s)
                                 }
                                 1 -> {
-                                    val x = XtreamClient(xServer.trim(), xUser.trim(), xPass.trim())
-                                    if (!x.login()) error = "Xtream: ${x.lastError.ifBlank { "giriş başarısız" }}"
-                                    else {
-                                        val ch = x.liveStreams()
-                                        val movies = x.vodStreams()
-                                        val series = x.seriesList()
-                                        if (ch.isEmpty() && movies.isEmpty() && series.isEmpty()) error = "Giriş ok ama içerik boş"
-                                        else {
-                                            ctx.dataStore.edit {
-                                                it[KEY_X_SERVER] = xServer.trim()
-                                                it[KEY_X_USER] = xUser.trim()
-                                                it[KEY_X_PASS] = xPass.trim()
-                                            }
-                                            onDone(Session("Xtream (${xUser.trim()})", ch, movies, series, xServer = xServer.trim(), xUser = xUser.trim(), xPass = xPass.trim()))
-                                        }
+                                    val s = loadXtreamSession(xServer, xUser, xPass)
+                                    ctx.dataStore.edit {
+                                        it[KEY_X_SERVER] = xServer.trim()
+                                        it[KEY_X_USER] = xUser.trim()
+                                        it[KEY_X_PASS] = xPass.trim()
                                     }
+                                    markLastSource(ctx, "xtream")
+                                    onDone(s)
                                 }
                                 2 -> {
-                                    val text = M3uParser.download(mUrl.trim())
-                                    val all = M3uParser.parse(text)
-                                    if (all.isEmpty()) error = "Listede içerik bulunamadı"
-                                    else {
-                                        ctx.dataStore.edit { it[KEY_M_URL] = mUrl.trim() }
-                                        onDone(Session("M3U", all.filter { it.genre != "VOD" }.ifEmpty { all }, all.filter { it.genre == "VOD" }, emptyList()))
-                                    }
+                                    val s = loadM3uSession(mUrl)
+                                    ctx.dataStore.edit { it[KEY_M_URL] = mUrl.trim() }
+                                    markLastSource(ctx, "m3u")
+                                    onDone(s)
                                 }
                             }
-                        } catch (e: Exception) { error = "Hata: ${e.message}" }
+                        } catch (e: Exception) { error = e.message ?: "Bağlanamadı" }
                         loading = false
                     }
                 },
@@ -320,11 +371,21 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
 fun HomeScreen(
     session: Session,
     onLogout: () -> Unit,
-    onPlayChannel: (StalkerChannel, String, String?) -> Unit,
+    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
     var mainTab by remember { mutableStateOf(MainTab.HOME) }
+    val act = LocalContext.current as? Activity
+    var lastBack by remember { mutableLongStateOf(0L) }
+    BackHandler {
+        val now = System.currentTimeMillis()
+        if (now - lastBack < 2000) act?.finish()
+        else {
+            lastBack = now
+            Toast.makeText(act, "Çıkmak için tekrar bas", Toast.LENGTH_SHORT).show()
+        }
+    }
     Scaffold(
         containerColor = Bg,
         bottomBar = {
@@ -426,7 +487,7 @@ private fun SectionTitle(title: String, count: Int, modifier: Modifier = Modifie
 @Composable
 fun DiscoverTab(
     session: Session, onLogout: () -> Unit,
-    onPlayChannel: (StalkerChannel, String, String?) -> Unit,
+    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
@@ -446,11 +507,12 @@ fun DiscoverTab(
             busy = ch.id
             try {
                 if (session.stalkerUrl.isNotEmpty()) {
-                    val url = StalkerClient(session.stalkerUrl, session.stalkerMac).createLink(ch.cmd)
-                    if (url.isNotBlank()) onPlayChannel(ch, url, null)
+                    val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
+                    val url = sc.createLink(ch.cmd)
+                    if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
                 } else {
                     val alt = if (ch.cmd.endsWith(".m3u8")) ch.cmd.dropLast(5) + ".ts" else null
-                    onPlayChannel(ch, ch.cmd, alt)
+                    onPlayChannel(ch, ch.cmd, alt, emptyMap())
                 }
             } finally { busy = null }
         }
@@ -559,7 +621,7 @@ fun DiscoverTab(
 }
 
 @Composable
-fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?) -> Unit) {
+fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var cat by remember { mutableStateOf("Tümü") }
@@ -577,11 +639,12 @@ fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?) -> 
             busy = ch.id
             try {
                 if (session.stalkerUrl.isNotEmpty()) {
-                    val url = StalkerClient(session.stalkerUrl, session.stalkerMac).createLink(ch.cmd)
-                    if (url.isNotBlank()) onPlayChannel(ch, url, null)
+                    val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
+                    val url = sc.createLink(ch.cmd)
+                    if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
                 } else {
                     val alt = if (ch.cmd.endsWith(".m3u8")) ch.cmd.dropLast(5) + ".ts" else null
-                    onPlayChannel(ch, ch.cmd, alt)
+                    onPlayChannel(ch, ch.cmd, alt, emptyMap())
                 }
             } finally { busy = null }
         }
@@ -653,7 +716,7 @@ fun SeriesTab(session: Session, onOpenSeries: (SeriesEntry) -> Unit) {
 @Composable
 fun SearchTab(
     session: Session,
-    onPlayChannel: (StalkerChannel, String, String?) -> Unit,
+    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
@@ -665,10 +728,15 @@ fun SearchTab(
         scope.launch {
             busy = ch.id
             try {
-                val url = if (session.stalkerUrl.isNotEmpty())
-                    StalkerClient(session.stalkerUrl, session.stalkerMac).createLink(ch.cmd) else ch.cmd
-                val alt = if (session.stalkerUrl.isEmpty() && url.endsWith(".m3u8")) url.dropLast(5) + ".ts" else null
-                if (url.isNotBlank()) onPlayChannel(ch, url, alt)
+                if (session.stalkerUrl.isNotEmpty()) {
+                    val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
+                    val url = sc.createLink(ch.cmd)
+                    if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
+                } else {
+                    val url = ch.cmd
+                    val alt = if (url.endsWith(".m3u8")) url.dropLast(5) + ".ts" else null
+                    if (url.isNotBlank()) onPlayChannel(ch, url, alt, emptyMap())
+                }
             } finally { busy = null }
         }
     }
@@ -724,7 +792,7 @@ fun SearchTab(
 // ==================== DETAYLAR ====================
 
 @Composable
-fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Unit, onSelect: (StalkerChannel) -> Unit, onPlay: (String, Long) -> Unit) {
+fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Unit, onSelect: (StalkerChannel) -> Unit, onPlay: (String, Long, Map<String, String>) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
@@ -746,16 +814,18 @@ fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Uni
             .ifEmpty { session.movies.filter { it.id != movie.id }.take(12) }
     }
 
+    BackHandler { onBack() }
     val resume by FavoritesStore.entryFlow(ctx, movie.id).collectAsState(initial = null)
 
     fun playNow(fromMs: Long = 0L) {
         scope.launch {
             busy = true
             try {
-                val url = if (session.stalkerUrl.isNotEmpty())
-                    StalkerClient(session.stalkerUrl, session.stalkerMac).createLink(movie.cmd)
-                else movie.cmd
-                if (url.isNotBlank()) onPlay(url, fromMs)
+                if (session.stalkerUrl.isNotEmpty()) {
+                    val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
+                    val url = sc.createLink(movie.cmd)
+                    if (url.isNotBlank()) onPlay(url, fromMs, sc.streamHeaders())
+                } else if (movie.cmd.isNotBlank()) onPlay(movie.cmd, fromMs, emptyMap())
             } finally { busy = false }
         }
     }
@@ -896,6 +966,7 @@ fun SeriesDetailScreen(
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    BackHandler { onBack() }
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
     val resumeMap by FavoritesStore.resumeFlow(ctx).collectAsState(initial = emptyMap())
     var full by remember { mutableStateOf<SeriesEntry?>(if (entry.episodes.isNotEmpty()) entry else null) }
