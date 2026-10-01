@@ -275,7 +275,7 @@ fun LoginScreen(onDone: (Session) -> Unit) {
 
 // ==================== ANA EKRAN ====================
 
-private enum class Tab(val title: String, val icon: ImageVector) {
+private enum class MainTab(val title: String, val icon: ImageVector) {
     HOME("Keşfet", Home), TV("Canlı", Tv), MOVIES("Film", Movie), SERIES("Dizi", PlayArrow), SEARCH("Ara", Search)
 }
 
@@ -287,14 +287,14 @@ fun HomeScreen(
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
-    var tab by remember { mutableStateOf(Tab.HOME) }
+    var mainTab by remember { mutableStateOf(MainTab.HOME) }
     Scaffold(
         containerColor = Bg,
         bottomBar = {
             NavigationBar(containerColor = Card2) {
-                Tab.entries.forEach { t ->
+                MainTab.entries.forEach { t ->
                     NavigationBarItem(
-                        selected = tab == t, onClick = { tab = t },
+                        selected = mainTab == t, onClick = { mainTab = t },
                         icon = { Icon(t.icon, null) }, label = { Text(t.title, fontSize = 10.sp) }
                     )
                 }
@@ -302,12 +302,12 @@ fun HomeScreen(
         }
     ) { pad ->
         Box(Modifier.padding(pad)) {
-            when (tab) {
-                Tab.HOME -> DiscoverTab(session, onLogout, onPlayChannel, onOpenMovie, onOpenSeries)
-                Tab.TV -> TvTab(session, onPlayChannel)
-                Tab.MOVIES -> MovieTab(session, onOpenMovie)
-                Tab.SERIES -> SeriesTab(session, onOpenSeries)
-                Tab.SEARCH -> SearchTab(session, onPlayChannel, onOpenMovie, onOpenSeries)
+            when (mainTab) {
+                MainTab.HOME -> DiscoverTab(session, onLogout, onPlayChannel, onOpenMovie, onOpenSeries)
+                MainTab.TV -> TvTab(session, onPlayChannel)
+                MainTab.MOVIES -> MovieTab(session, onOpenMovie)
+                MainTab.SERIES -> SeriesTab(session, onOpenSeries)
+                MainTab.SEARCH -> SearchTab(session, onPlayChannel, onOpenMovie, onOpenSeries)
             }
         }
     }
