@@ -280,10 +280,32 @@ class StalkerClient(
         val enc = URLEncoder.encode(cmd, "UTF-8")
         val js = api("itv.create_link", "&cmd=$enc&forced_storage=0&disable_ad=0") ?: run {
             val js2 = api("vod.create_link", "&cmd=$enc&forced_storage=0&disable_ad=0") ?: return ""
-            return js2.optString("cmd", js2.optString("url", ""))
+            return cleanLink(js2.optString("cmd", js2.optString("url", "")))
         }
         var link = js.optString("cmd", "")
         if (link.isBlank()) link = js.optString("url", "")
-        return link
+        return cleanLink(link)
+    }
+
+    /** Ministra bazen "ffmpeg http://..." dondurur; player ham URL ister. */
+    fun cleanLink(raw: String): String {
+        var s = raw.trim()
+        for (prefix in listOf("ffmpeg ", "auto ", "nimble ")) {
+            if (s.startsWith(prefix, ignoreCase = true)) s = s.substring(prefix.length).trim()
+        }
+        // link goreceli ise portala tamamla
+        if (s.startsWith("/")) s = base().trimEnd('/') + s
+        return s
+    }
+
+    /** Stalker stream sunuculari MAG basliklari isteyebilir; player'a verilir. */
+    fun streamHeaders(): Map<String, String> {
+        val ids = shortId()
+        return mapOf(
+            "User-Agent" to "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG254 stbapp ver: 4 rev: 2721 Safari/533.3",
+            "Referer" to base(),
+            "Cookie" to "mac=$mac; stb_lang=en; timezone=Europe%2FIstanbul; " +
+                    "serial_number=$ids; device_id=$ids; device_id2=$ids; stb_token=$token"
+        )
     }
 }
