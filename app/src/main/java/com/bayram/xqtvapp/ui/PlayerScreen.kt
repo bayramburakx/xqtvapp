@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -35,8 +37,10 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.bayram.xqtvapp.PlayReq
+import com.bayram.xqtvapp.data.EpisodeEntry
 import kotlinx.coroutines.delay
 
+private val NetflixRed = Color(0xFFE50914)
 private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.5f)
 private val RESIZE_NAMES = listOf("Sığdır", "Doldur", "Zoom")
 private val RESIZE_MODES = listOf(
@@ -56,15 +60,17 @@ fun fmtMs(ms: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%02d:%02d".format(m, sec)
 }
 
-/** Tamamen özel sinematik oynatıcı: hazır kontrolcü kapalı, kendi arayüzümüz açık. */
+/** Netflix tarzı player: kırmızı scrubber, sonraki bölüm, bölüm listesi, hız/altyazı/uyku. */
 @Composable
 fun PlayerScreen(req: PlayReq, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val view = LocalView.current
     var currentUrl by remember { mutableStateOf(req.url) }
+    var currentIdx by remember { mutableIntStateOf(req.episodeIndex) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var buffering by remember { mutableStateOf(true) }
     var playing by remember { mutableStateOf(true) }
+    var ended by remember { mutableStateOf(false) }
     var retryKey by remember { mutableIntStateOf(0) }
     var resizeIdx by remember { mutableIntStateOf(0) }
     var speedIdx by remember { mutableIntStateOf(0) }
@@ -73,23 +79,37 @@ fun PlayerScreen(req: PlayReq, onBack: () -> Unit) {
     var pos by remember { mutableLongStateOf(0L) }
     var dur by remember { mutableLongStateOf(0L) }
     var showTracks by remember { mutableStateOf(false) }
+    var showMore by remember { mutableStateOf(false) }
+    var showEpisodes by remember { mutableStateOf(false) }
     var showTimer by remember { mutableStateOf(false) }
     var sleepMin by remember { mutableStateOf(0) }
     var trackTick by remember { mutableIntStateOf(0) }
+    var countdown by remember { mutableIntStateOf(-1) }
 
     DisposableEffect(Unit) {
         view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
     }
 
+    val hasSeries = req.episodes.isNotEmpty()
+    val nextEp: EpisodeEntry? = if (hasSeries) req.episodes.getOrNull(currentIdx + 1) else null
+    val displayTitle = if (hasSeries && currentIdx >= 0) {
+        val ep = req.episodes.getOrNull(currentIdx)
+        if (ep != null) "${req.seriesTitle} • S${ep.season} B${ep.episode}" else req.title
+    } else req.title
+
     val exo = remember(currentUrl, retryKey) {
-        errorMsg = null; buffering = true; playing = true
+        errorMsg = null; buffering = true; playing = true; ended = false; countdown = -1
         try {
             ExoPlayer.Builder(ctx).build().apply {
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
                         buffering = state == Player.STATE_BUFFERING
                         if (state == Player.STATE_READY) errorMsg = null
+                        if (state == Player.STATE_ENDED) {
+                            playing = false; ended = true
+                            if (nextEp != null) countdown = 10
+                        }
                     }
                     override fun onIsPlayingChanged(v: Boolean) { playing = v }
                     override fun onPlayerError(error: PlaybackException) {
@@ -109,7 +129,6 @@ fun PlayerScreen(req: PlayReq, onBack: () -> Unit) {
     }
     DisposableEffect(exo) { onDispose { exo?.release() } }
 
-    // konum saati
     LaunchedEffect(exo) {
         while (true) {
             pos = exo?.currentPosition ?: 0L
@@ -117,14 +136,12 @@ fun PlayerScreen(req: PlayReq, onBack: () -> Unit) {
             delay(500)
         }
     }
-    // kontrolcüyü otomatik gizle
     LaunchedEffect(showUi, uiTick, playing) {
-        if (showUi && playing) {
-            delay(3500)
+        if (showUi && playing && !ended) {
+            delay(4000)
             showUi = false
         }
     }
-    // uyku zamanlayıcı
     LaunchedEffect(sleepMin) {
         if (sleepMin > 0) {
             delay(sleepMin * 60_000L)
@@ -132,11 +149,28 @@ fun PlayerScreen(req: PlayReq, onBack: () -> Unit) {
             sleepMin = 0
         }
     }
+    // sonraki bölüm geri sayımı
+    LaunchedEffect(countdown) {
+        if (countdown > 0) {
+            delay(1000)
+            countdown--
+        } else if (countdown == 0 && nextEp != null) {
+            currentUrl = nextEp.url
+            currentIdx++
+            retryKey++
+        }
+    }
 
     val isLive = dur <= 0L
     val interaction = remember { MutableInteractionSource() }
 
     fun poke() { showUi = true; uiTick++ }
+    fun playEpisode(idx: Int) {
+        val ep = req.episodes.getOrNull(idx) ?: return
+        currentIdx = idx
+        currentUrl = ep.url
+        retryKey++
+    }
     fun switchFormat() {
         if (req.altUrl != null) {
             currentUrl = if (currentUrl == req.url) req.altUrl else req.url
@@ -162,138 +196,230 @@ fun PlayerScreen(req: PlayReq, onBack: () -> Unit) {
             )
         }
 
-        if (buffering && errorMsg == null) {
+        if (buffering && errorMsg == null && !ended) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Color.White)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Yükleniyor...", color = Color.White, fontSize = 13.sp)
-                }
+                CircularProgressIndicator(color = NetflixRed, strokeWidth = 5.dp, modifier = Modifier.size(56.dp))
             }
         }
 
-        // orta: duraklatıldıysa büyük buton
-        if (!playing && !buffering && errorMsg == null && exo != null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                IconButton(
-                    onClick = { exo.play(); poke() },
-                    modifier = Modifier.size(76.dp).background(Color(0xAA000000), CircleShape)
-                ) { Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(44.dp)) }
-            }
-        }
-
-        // üst bar
-        if (showUi) {
-            Column(
+        // ---- üst bar ----
+        if (showUi && !ended) {
+            Row(
                 Modifier.fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
-                    .padding(8.dp)
+                    .background(Brush.verticalGradient(listOf(Color(0xDD000000), Color.Transparent)))
+                    .padding(6.dp, 10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, "Geri", tint = Color.White)
+                IconButton(onClick = onBack) {
+                    Icon(Icons.Filled.ArrowBack, "Geri", tint = Color.White, modifier = Modifier.size(28.dp))
+                }
+                Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                    Text(displayTitle, color = Color.White, fontWeight = FontWeight.Bold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp)
+                    if (hasSeries) Text(req.seriesTitle, color = Color.Gray, fontSize = 11.sp, maxLines = 1)
+                }
+                if (hasSeries) {
+                    TextButton(onClick = { showEpisodes = true; poke() }) {
+                        Text("Bölümler", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
-                    Text(req.title, color = Color.White, fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
-                    if (req.altUrl != null) {
-                        TextButton(onClick = { switchFormat(); poke() }) {
-                            Text(if (currentUrl.endsWith(".ts")) "HLS" else "TS", color = Color.White, fontSize = 12.sp)
-                        }
+                }
+                TextButton(onClick = { showTracks = true; trackTick++; poke() }) {
+                    Text("Ses/Altyazı", color = Color.White, fontSize = 12.sp)
+                }
+                TextButton(onClick = { showMore = true; poke() }) {
+                    Text("•••", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+
+        // ---- orta kontroller ----
+        if (showUi && !buffering && errorMsg == null && !ended && exo != null) {
+            Row(
+                Modifier.align(Alignment.Center),
+                horizontalArrangement = Arrangement.spacedBy(44.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (!isLive) {
+                    IconButton(onClick = { exo.seekBack(); poke() }, modifier = Modifier.size(52.dp)) {
+                        Icon(Icons.Filled.Replay10, "Geri 10", tint = Color.White, modifier = Modifier.size(44.dp))
                     }
-                    TextButton(onClick = {
-                        resizeIdx = (resizeIdx + 1) % 3
-                        poke()
-                    }) { Text(RESIZE_NAMES[resizeIdx], color = Color.White, fontSize = 12.sp) }
-                    TextButton(onClick = {
-                        speedIdx = (speedIdx + 1) % SPEEDS.size
-                        exo?.setPlaybackSpeed(SPEEDS[speedIdx])
-                        poke()
-                    }) { Text("${SPEEDS[speedIdx]}x", color = Color.White, fontSize = 12.sp) }
-                    TextButton(onClick = { showTracks = true; trackTick++; poke() }) {
-                        Text("CC", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                    TextButton(onClick = { showTimer = true; poke() }) {
-                        Text(if (sleepMin > 0) "${sleepMin}dk" else "Zzz", color = Color.White, fontSize = 12.sp)
+                }
+                IconButton(
+                    onClick = { if (playing) exo.pause() else exo.play(); poke() },
+                    modifier = Modifier.size(78.dp).background(Color(0x66000000), CircleShape)
+                ) {
+                    Icon(
+                        if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null,
+                        tint = Color.White, modifier = Modifier.size(52.dp)
+                    )
+                }
+                if (!isLive) {
+                    IconButton(onClick = { exo.seekForward(); poke() }, modifier = Modifier.size(52.dp)) {
+                        Icon(Icons.Filled.Forward10, "İleri 10", tint = Color.White, modifier = Modifier.size(44.dp))
                     }
                 }
             }
         }
 
-        // alt bar
-        if (showUi) {
+        // ---- alt bar: Netflix kırmızı scrubber ----
+        if (showUi && !ended) {
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000))))
-                    .padding(16.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD000000))))
+                    .padding(16.dp, 10.dp, 16.dp, 14.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (isLive) {
-                        Text("● CANLI", color = Color(0xFFFF5252), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    } else {
-                        Text(fmtMs(pos), color = Color.White, fontSize = 13.sp)
+                if (isLive) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("● CANLI", color = NetflixRed, fontWeight = FontWeight.Black, fontSize = 13.sp)
+                        Spacer(Modifier.weight(1f))
+                        if (req.altUrl != null) {
+                            TextButton(onClick = { switchFormat(); poke() }) {
+                                Text(if (currentUrl.endsWith(".ts")) "HLS dene" else "TS dene",
+                                    color = Color.White, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(fmtMs(pos), color = Color.White, fontSize = 12.sp)
                         Slider(
-                            value = if (dur > 0) pos.toFloat() / dur else 0f,
+                            value = if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f,
                             onValueChange = { f -> exo?.seekTo((f * dur).toLong()) },
-                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                            modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor = NetflixRed, activeTrackColor = NetflixRed,
+                                inactiveTrackColor = Color(0xFF4D4D4D)
+                            )
                         )
-                        Text(fmtMs(dur), color = Color.White, fontSize = 13.sp)
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (!isLive) {
-                        IconButton(onClick = { exo?.seekBack(); poke() }) {
-                            Icon(Icons.Filled.Replay10, "Geri 10sn", tint = Color.White, modifier = Modifier.size(32.dp))
-                        }
-                    }
-                    IconButton(
-                        onClick = { if (playing) exo?.pause() else exo?.play(); poke() },
-                        modifier = Modifier.size(60.dp).background(Color.White, CircleShape)
-                    ) {
-                        Icon(
-                            if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null,
-                            tint = Color.Black, modifier = Modifier.size(34.dp)
-                        )
-                    }
-                    if (!isLive) {
-                        IconButton(onClick = { exo?.seekForward(); poke() }) {
-                            Icon(Icons.Filled.Forward10, "İleri 10sn", tint = Color.White, modifier = Modifier.size(32.dp))
-                        }
+                        Text(fmtMs(dur - pos) + " kaldı", color = Color.White, fontSize = 12.sp)
                     }
                 }
             }
         }
 
-        // hata paneli
+        // ---- sonraki bölüm (dizi finali) ----
+        if (ended && nextEp != null && errorMsg == null) {
+            Box(
+                Modifier.fillMaxSize().background(Color(0xEE000000)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Sıradaki bölüm", color = Color.Gray, fontSize = 13.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "S${nextEp.season} • B${nextEp.episode} — ${nextEp.title}",
+                        color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (countdown > 0) Text("$countdown sn içinde başlıyor...", color = Color.Gray, fontSize = 13.sp)
+                    Spacer(Modifier.height(16.dp))
+                    Button(
+                        onClick = { playEpisode(currentIdx + 1) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    ) {
+                        Icon(Icons.Filled.PlayArrow, null, tint = Color.Black)
+                        Text("Hemen Oynat", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { countdown = -1 },
+                        shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()
+                    ) { Text("Vazgeç", color = Color.White) }
+                }
+            }
+        }
+
+        // ---- hata ----
         if (errorMsg != null) {
-            Box(Modifier.fillMaxSize().background(Color(0xDD000000)), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().background(Color(0xEE000000)), contentAlignment = Alignment.Center) {
                 Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Yayın açılamadı", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                     Spacer(Modifier.height(8.dp))
                     Text(errorMsg!!, color = Color.Gray, fontSize = 13.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Farklı formatı dene, çoğu Xtream sunucusu TS ister.", color = Color.Gray, fontSize = 12.sp)
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(onClick = { retryKey++ }) { Text("Tekrar dene") }
+                        Button(
+                            onClick = { retryKey++ },
+                            colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("Tekrar dene", color = Color.White) }
                         if (req.altUrl != null) {
-                            Button(onClick = { switchFormat() }) {
-                                Text(if (currentUrl == req.url) "TS ile dene" else "HLS ile dene")
+                            OutlinedButton(onClick = { switchFormat() }, shape = RoundedCornerShape(10.dp)) {
+                                Text(if (currentUrl == req.url) "TS ile dene" else "HLS ile dene", color = Color.White)
                             }
                         }
                     }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = onBack) { Text("Geri dön", color = Color.Gray) }
                 }
             }
         }
     }
 
+    if (showEpisodes && hasSeries) {
+        AlertDialog(
+            onDismissRequest = { showEpisodes = false },
+            title = { Text(req.seriesTitle, fontSize = 16.sp) },
+            text = {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                    items(req.episodes.size) { i ->
+                        val ep = req.episodes[i]
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                                .clickable { playEpisode(i); showEpisodes = false }
+                                .background(if (i == currentIdx) Color(0x22E50914) else Color.Transparent)
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("S${ep.season} B${ep.episode}", color = NetflixRed, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.width(64.dp))
+                            Text(ep.title, fontSize = 13.sp, modifier = Modifier.weight(1f),
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (i == currentIdx) {
+                                Icon(Icons.Filled.PlayArrow, null, tint = NetflixRed, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showEpisodes = false }) { Text("Kapat") } }
+        )
+    }
+
     if (showTracks && exo != null) {
         TrackDialog(exo = exo, tick = trackTick, onClose = { showTracks = false })
+    }
+
+    if (showMore && exo != null) {
+        AlertDialog(
+            onDismissRequest = { showMore = false },
+            title = { Text("Oynatıcı ayarları", fontSize = 16.sp) },
+            text = {
+                Column {
+                    MoreRow("Görüntü", RESIZE_NAMES[resizeIdx]) {
+                        val i = (resizeIdx + 1) % 3
+                        resizeIdx = i
+                    }
+                    MoreRow("Hız", "${SPEEDS[speedIdx]}x") {
+                        speedIdx = (speedIdx + 1) % SPEEDS.size
+                        exo.setPlaybackSpeed(SPEEDS[speedIdx])
+                    }
+                    MoreRow("Uyku", if (sleepMin > 0) "$sleepMin dk" else "Kapalı") {
+                        showMore = false
+                        showTimer = true
+                    }
+                    if (req.altUrl != null) {
+                        MoreRow("Format", if (currentUrl.endsWith(".ts")) "TS" else "HLS") {
+                            switchFormat()
+                            showMore = false
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showMore = false }) { Text("Kapat") } }
+        )
     }
 
     if (showTimer) {
@@ -304,9 +430,7 @@ fun PlayerScreen(req: PlayReq, onBack: () -> Unit) {
                 Column {
                     listOf(0, 10, 20, 30, 60).forEach { m ->
                         Row(
-                            Modifier.fillMaxWidth().clickable {
-                                sleepMin = m; showTimer = false
-                            }.padding(10.dp),
+                            Modifier.fillMaxWidth().clickable { sleepMin = m; showTimer = false }.padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(selected = sleepMin == m, onClick = { sleepMin = m; showTimer = false })
@@ -322,8 +446,18 @@ fun PlayerScreen(req: PlayReq, onBack: () -> Unit) {
 }
 
 @Composable
+private fun MoreRow(label: String, value: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, modifier = Modifier.weight(1f), fontSize = 14.sp)
+        Text(value, color = Color.Gray, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
 private fun TrackDialog(exo: ExoPlayer, tick: Int, onClose: () -> Unit) {
-    // tick her açılışta tazele
     key(tick) {
         val audio = mutableListOf<TrackOpt>()
         val text = mutableListOf<TrackOpt>()
