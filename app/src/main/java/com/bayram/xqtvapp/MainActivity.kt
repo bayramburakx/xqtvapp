@@ -803,6 +803,7 @@ fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Uni
     }
 }
 
+@Composable
 private fun MetaChip(t: String) {
     Text(t, fontSize = 11.sp, color = Color.LightGray,
         modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Card2).padding(6.dp, 3.dp))
