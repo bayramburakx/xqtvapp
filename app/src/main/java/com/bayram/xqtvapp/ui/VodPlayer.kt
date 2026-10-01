@@ -35,6 +35,7 @@ import com.bayram.xqtvapp.PlayReq
 import com.bayram.xqtvapp.data.EpisodeEntry
 import com.bayram.xqtvapp.data.FavoritesStore
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val NetflixRed = Color(0xFFE50914)
 private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.5f)
