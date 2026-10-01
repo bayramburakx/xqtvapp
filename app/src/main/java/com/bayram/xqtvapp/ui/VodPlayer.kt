@@ -80,6 +80,7 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
 
     val hasSeries = req.episodes.isNotEmpty()
     val saveScope = rememberCoroutineScope()
+    val errScope = rememberCoroutineScope()
     var resumeKey by remember { mutableStateOf(req.resumeId) }
     val nextEp: EpisodeEntry? = if (hasSeries) req.episodes.getOrNull(currentIdx + 1) else null
     val displayTitle = if (hasSeries && currentIdx >= 0) {
@@ -90,7 +91,7 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
     val exo = remember(currentUrl, retryKey) {
         errorMsg = null; buffering = true; playing = true; ended = false; countdown = -1
         try {
-            PlayerBackend.build(ctx, currentUrl, isLive = false).apply {
+            PlayerBackend.build(ctx, currentUrl, isLive = false, req.headers).apply {
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
                         buffering = state == Player.STATE_BUFFERING
@@ -111,7 +112,12 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                     override fun onIsPlayingChanged(v: Boolean) { playing = v }
                     override fun onPlayerError(error: PlaybackException) {
                         buffering = false; playing = false
-                        errorMsg = "Oynatılamadı (${error.errorCodeName})"
+                        val base = "Oynatılamadı (${error.errorCodeName})"
+                        errorMsg = base
+                        errScope.launch {
+                            val st = PlayerBackend.probeStatus(currentUrl, req.headers)
+                            errorMsg = "$base • Sunucu: $st"
+                        }
                     }
                 })
                 setPlaybackSpeed(SPEEDS[speedIdx])
