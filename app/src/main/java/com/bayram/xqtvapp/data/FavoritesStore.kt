@@ -13,7 +13,6 @@ private val KEY_RECENT = stringPreferencesKey("recent_v2")
 
 private const val FS = "\u001F"
 private const val RS = "\u001E"
-"
 
 /** Favoriler + izlemeye devam et (DataStore, hafif ve senkronsuz). */
 object FavoritesStore {
