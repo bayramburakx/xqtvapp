@@ -42,6 +42,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import coil.compose.AsyncImage
+import com.bayram.xqtvapp.data.EpisodeEntry
 import com.bayram.xqtvapp.data.FavoritesStore
 import com.bayram.xqtvapp.data.M3uParser
 import com.bayram.xqtvapp.data.SeriesEntry
@@ -94,7 +95,14 @@ data class Session(
     val xPass: String = ""
 )
 
-data class PlayReq(val title: String, val url: String, val altUrl: String?)
+data class PlayReq(
+    val title: String,
+    val url: String,
+    val altUrl: String?,
+    val seriesTitle: String = "",
+    val episodes: List<EpisodeEntry> = emptyList(),
+    val episodeIndex: Int = -1
+)
 
 @Composable
 fun AppNav() {
@@ -110,17 +118,27 @@ fun AppNav() {
         play = PlayReq(ch.name, url, alt)
     }
 
+    fun openEpisode(seriesName: String, cover: String, episodes: List<EpisodeEntry>, idx: Int) {
+        val ep = episodes.getOrNull(idx) ?: return
+        val title = "$seriesName • S${ep.season} B${ep.episode}"
+        scope.launch {
+            FavoritesStore.pushRecent(ctx, StalkerChannel("series_" + ep.id, title, cover, ep.url, "Series"))
+        }
+        play = PlayReq(title, ep.url, null, seriesTitle = seriesName, episodes = episodes, episodeIndex = idx)
+    }
+
     when {
         play != null -> PlayerScreen(req = play!!, onBack = { play = null })
         movieDetail != null -> MovieDetailScreen(
             movie = movieDetail!!, session = session!!,
             onBack = { movieDetail = null },
+            onSelect = { movieDetail = it },
             onPlay = { url -> openPlay(movieDetail!!, url, null) }
         )
         seriesDetail != null -> SeriesDetailScreen(
             entry = seriesDetail!!, session = session!!,
             onBack = { seriesDetail = null },
-            onPlay = { title, url -> openPlay(StalkerChannel(title, title, seriesDetail!!.cover, url, "Series"), url, null) }
+            onPlayEpisode = { name, cover, eps, idx -> openEpisode(name, cover, eps, idx) }
         )
         session == null -> LoginScreen(onDone = { session = it })
         else -> HomeScreen(
@@ -643,7 +661,7 @@ fun SearchTab(
 // ==================== DETAYLAR ====================
 
 @Composable
-fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Unit, onPlay: (String) -> Unit) {
+fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Unit, onSelect: (StalkerChannel) -> Unit, onPlay: (String) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
@@ -651,6 +669,7 @@ fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Uni
     var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(movie.id) {
+        detail = null
         if (session.xServer.isNotEmpty() && movie.id.startsWith("vod_")) {
             try {
                 detail = XtreamClient(session.xServer, session.xUser, session.xPass)
@@ -659,93 +678,143 @@ fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Uni
         }
     }
 
+    val similar = remember(movie.id, session) {
+        session.movies.filter { it.id != movie.id && it.genre == movie.genre }.take(12)
+            .ifEmpty { session.movies.filter { it.id != movie.id }.take(12) }
+    }
+
+    fun playNow() {
+        scope.launch {
+            busy = true
+            try {
+                val url = if (session.stalkerUrl.isNotEmpty())
+                    StalkerClient(session.stalkerUrl, session.stalkerMac).createLink(movie.cmd)
+                else movie.cmd
+                if (url.isNotBlank()) onPlay(url)
+            } finally { busy = false }
+        }
+    }
+
     LazyColumn(Modifier.fillMaxSize().background(Bg)) {
         item {
+            // --- vitrin ---
             Box(Modifier.fillMaxWidth()) {
-                AsyncImage(model = detail?.cover?.ifBlank { movie.logo } ?: movie.logo,
-                    contentDescription = null, modifier = Modifier.fillMaxWidth().height(260.dp),
-                    contentScale = ContentScale.Crop)
-                Box(Modifier.fillMaxWidth().height(260.dp)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Bg))))
-                TextButton(onClick = onBack, modifier = Modifier.padding(8.dp)) {
-                    Text("< Geri", color = Color.White)
+                AsyncImage(
+                    model = detail?.cover?.ifBlank { movie.logo } ?: movie.logo,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxWidth().height(340.dp),
+                    contentScale = ContentScale.Crop
+                )
+                Box(
+                    Modifier.fillMaxWidth().height(340.dp).background(
+                        Brush.verticalGradient(
+                            listOf(Color(0x55000000), Color.Transparent, Bg),
+                            startY = 0f, endY = 900f
+                        )
+                    )
+                )
+                TextButton(onClick = onBack, modifier = Modifier.padding(10.dp)) {
+                    Text("< Geri", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+                Column(Modifier.align(Alignment.BottomStart).padding(20.dp, 12.dp)) {
+                    Text("FİLM", color = AccentRed, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                    Text(movie.name, fontSize = 30.sp, fontWeight = FontWeight.Black, lineHeight = 32.sp)
                 }
             }
-            Column(Modifier.padding(20.dp, 0.dp, 20.dp, 20.dp)) {
-                Text(movie.name, fontSize = 26.sp, fontWeight = FontWeight.Black)
-                Spacer(Modifier.height(6.dp))
+            // --- meta ---
+            Column(Modifier.padding(20.dp, 4.dp, 20.dp, 0.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (detail?.rating?.isNotBlank() == true) {
-                        Icon(Icons.Filled.Star, null, tint = Color(0xFFFFC107), modifier = Modifier.size(16.dp))
-                        Text(detail!!.rating, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Filled.Star, null, tint = Color(0xFFFFC107), modifier = Modifier.size(17.dp))
+                        Text(detail!!.rating, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                     if (detail?.year?.isNotBlank() == true) MetaChip(detail!!.year)
                     if (detail?.duration?.isNotBlank() == true) MetaChip(detail!!.duration)
-                    MetaChip(movie.genre)
+                    MetaChip("HD")
                 }
-                if (detail?.genre?.isNotBlank() == true) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(detail!!.genre, color = Color.Gray, fontSize = 12.sp)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    listOfNotNull(
+                        movie.genre.takeIf { it.isNotBlank() },
+                        detail?.genre?.takeIf { it.isNotBlank() }
+                    ).distinct().joinToString(" • "),
+                    color = Color.Gray, fontSize = 12.sp
+                )
+                Spacer(Modifier.height(14.dp))
+                // --- aksiyonlar (Netflix tarzi) ---
+                Button(
+                    onClick = { playNow() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    enabled = !busy
+                ) {
+                    Icon(Icons.Filled.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(26.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (busy) "Açılıyor..." else "Oynat", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                busy = true
-                                try {
-                                    val url = if (session.stalkerUrl.isNotEmpty())
-                                        StalkerClient(session.stalkerUrl, session.stalkerMac).createLink(movie.cmd)
-                                    else movie.cmd
-                                    if (url.isNotBlank()) onPlay(url)
-                                } finally { busy = false }
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                        shape = RoundedCornerShape(14.dp), modifier = Modifier.weight(1f).height(52.dp),
-                        enabled = !busy
-                    ) {
-                        Icon(Icons.Filled.PlayArrow, null, tint = Color.Black)
-                        Text(if (busy) "Açılıyor..." else "Oynat", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
                     OutlinedButton(
                         onClick = { scope.launch { FavoritesStore.toggle(ctx, movie.id) } },
-                        shape = RoundedCornerShape(14.dp), modifier = Modifier.height(52.dp)
+                        shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) {
                         Icon(
                             if (favs.contains(movie.id)) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                             null,
-                            tint = if (favs.contains(movie.id)) AccentRed else Color.White
+                            tint = if (favs.contains(movie.id)) AccentRed else Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (favs.contains(movie.id)) "Listemde ✓" else "+ Listeye Ekle", fontSize = 13.sp)
                     }
                 }
                 if (detail?.plot?.isNotBlank() == true) {
-                    Spacer(Modifier.height(14.dp))
-                    Text("Konu", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text(detail!!.plot, color = Color.LightGray, fontSize = 14.sp)
+                    Spacer(Modifier.height(16.dp))
+                    Text(detail!!.plot, color = Color.White.copy(alpha = 0.92f), fontSize = 14.sp, lineHeight = 20.sp)
                 }
                 if (detail?.cast?.isNotBlank() == true) {
                     Spacer(Modifier.height(10.dp))
-                    Text("Oyuncular", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Oyuncular: ", color = Color.Gray, fontSize = 12.sp)
                     Text(detail!!.cast, color = Color.Gray, fontSize = 13.sp)
                 }
                 if (detail?.director?.isNotBlank() == true) {
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(4.dp))
                     Text("Yönetmen: ${detail!!.director}", color = Color.Gray, fontSize = 13.sp)
                 }
+            }
+        }
+        if (similar.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(18.dp))
+                Text("Bunları da beğenebilirsin", fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp))
+                Spacer(Modifier.height(8.dp))
+            }
+            item {
+                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(similar, key = { it.id }) { m ->
+                        PosterCard(m.name, m.genre, m.logo) { onSelect(m) }
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
 }
 
-@Composable
 private fun MetaChip(t: String) {
     Text(t, fontSize = 11.sp, color = Color.LightGray,
         modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Card2).padding(6.dp, 3.dp))
 }
 
 @Composable
-fun SeriesDetailScreen(entry: SeriesEntry, session: Session, onBack: () -> Unit, onPlay: (String, String) -> Unit) {
+fun SeriesDetailScreen(
+    entry: SeriesEntry,
+    session: Session,
+    onBack: () -> Unit,
+    onPlayEpisode: (String, String, List<EpisodeEntry>, Int) -> Unit
+) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
@@ -754,6 +823,7 @@ fun SeriesDetailScreen(entry: SeriesEntry, session: Session, onBack: () -> Unit,
     var loading by remember { mutableStateOf(false) }
 
     LaunchedEffect(entry.id) {
+        full = if (entry.episodes.isNotEmpty()) entry else null
         if (full == null && session.xServer.isNotEmpty()) {
             loading = true
             try {
@@ -765,57 +835,106 @@ fun SeriesDetailScreen(entry: SeriesEntry, session: Session, onBack: () -> Unit,
 
     val seasons = remember(full) { full?.episodes?.map { it.season }?.distinct()?.sorted() ?: emptyList() }
     val eps = remember(full, season) { full?.episodes?.filter { season == -1 || it.season == season } ?: emptyList() }
+    val allEps = remember(full) { full?.episodes ?: emptyList() }
 
     LazyColumn(Modifier.fillMaxSize().background(Bg)) {
         item {
-            TextButton(onClick = onBack) { Text("< Diziler", color = Color.White) }
-            Row(Modifier.padding(20.dp, 0.dp, 20.dp, 20.dp)) {
+            // --- vitrin ---
+            Box(Modifier.fillMaxWidth()) {
                 AsyncImage(model = entry.cover, contentDescription = null,
-                    modifier = Modifier.width(130.dp).height(190.dp).clip(RoundedCornerShape(16.dp)),
-                    contentScale = ContentScale.Crop)
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(entry.name, fontSize = 22.sp, fontWeight = FontWeight.Black)
-                    Text(entry.category, color = Color.Gray, fontSize = 13.sp)
-                    Spacer(Modifier.height(4.dp))
+                    modifier = Modifier.fillMaxWidth().height(300.dp), contentScale = ContentScale.Crop)
+                Box(
+                    Modifier.fillMaxWidth().height(300.dp).background(
+                        Brush.verticalGradient(listOf(Color(0x55000000), Color.Transparent, Bg))
+                    )
+                )
+                TextButton(onClick = onBack, modifier = Modifier.padding(10.dp)) {
+                    Text("< Geri", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+                Column(Modifier.align(Alignment.BottomStart).padding(20.dp, 12.dp)) {
+                    Text("DİZİ • ${entry.category}", color = AccentRed, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                    Text(entry.name, fontSize = 30.sp, fontWeight = FontWeight.Black, lineHeight = 32.sp)
                     Text(
                         if (loading) "Bölümler yükleniyor..."
-                        else if (full == null) "Bölüm bilgisi alınamadı"
-                        else "${seasons.size} sezon • ${full!!.episodes.size} bölüm",
-                        color = Color.Gray, fontSize = 13.sp
+                        else "${seasons.size} Sezon • ${allEps.size} Bölüm",
+                        color = Color.LightGray, fontSize = 13.sp
                     )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(onClick = { scope.launch { FavoritesStore.toggle(ctx, entry.id) } }) {
-                        Icon(
-                            if (favs.contains(entry.id)) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                            null,
-                            tint = if (favs.contains(entry.id)) AccentRed else Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (favs.contains(entry.id)) "Listemde" else "Listeye ekle", fontSize = 12.sp)
-                    }
                 }
             }
-            if (seasons.size > 1) {
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(seasons) { s ->
-                        FilterChip(selected = season == s, onClick = { season = s }, label = { Text("Sezon $s") })
+            Column(Modifier.padding(20.dp, 4.dp, 20.dp, 0.dp)) {
+                Button(
+                    onClick = {
+                        val list = allEps
+                        if (list.isNotEmpty()) onPlayEpisode(entry.name, entry.cover, list, 0)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    enabled = !loading && allEps.isNotEmpty()
+                ) {
+                    Icon(Icons.Filled.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(26.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (loading) "Yükleniyor..."
+                        else "1. Sezondan Başla",
+                        color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 16.sp
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { scope.launch { FavoritesStore.toggle(ctx, entry.id) } },
+                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Icon(
+                        if (favs.contains(entry.id)) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                        null,
+                        tint = if (favs.contains(entry.id)) AccentRed else Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (favs.contains(entry.id)) "Listemde ✓" else "+ Listeye Ekle", fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("Bölümler", fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                if (seasons.size > 1) {
+                    Spacer(Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(seasons) { s ->
+                            FilterChip(selected = season == s, onClick = { season = s }, label = { Text("Sezon $s") })
+                        }
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(4.dp))
             }
         }
         items(eps, key = { it.id }) { ep ->
-            ListItem(
-                headlineContent = { Text("S${ep.season}:B${ep.episode} • ${ep.title}") },
-                supportingContent = { Text(ep.url.substringAfterLast(".").uppercase()) },
-                trailingContent = {
-                    TextButton(onClick = { onPlay("${entry.name} ${ep.title}", ep.url) }) { Text("Oynat") }
+            val idx = allEps.indexOfFirst { it.id == ep.id }
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 5.dp)
+                    .clickable { onPlayEpisode(entry.name, entry.cover, allEps, idx) },
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Card2)
+            ) {
+                Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${ep.episode}", fontSize = 26.sp, fontWeight = FontWeight.Black, color = Color.Gray,
+                        modifier = Modifier.width(40.dp))
+                    AsyncImage(model = ep.cover.ifBlank { entry.cover }, contentDescription = null,
+                        modifier = Modifier.width(112.dp).height(64.dp).clip(RoundedCornerShape(10.dp)),
+                        contentScale = ContentScale.Crop)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("S${ep.season} • B${ep.episode}", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(ep.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(ep.url.substringAfterLast(".").uppercase() + " • HD", color = Color.Gray, fontSize = 11.sp)
+                    }
+                    Box(Modifier.size(42.dp).clip(RoundedCornerShape(21.dp)).background(Color.White),
+                        contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(24.dp))
+                    }
                 }
-            )
-            HorizontalDivider()
+            }
         }
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
