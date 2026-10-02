@@ -369,12 +369,10 @@ fun HomeScreen(
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
-    // rememberSaveable: dondurmede sekme korunur; SaveableStateHolder: sekmeler arasi
-    // geciste scroll/kategori durumu kaybolmaz -> kasma hissi azalir, tekrar yukleme olmaz
+    // Sekme donusumde korunur; sekmeler key ile ayrilir, gereksiz yeniden yukleme azalir
     var tabIdx by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
-    var tab: MainTab
-        get() = MainTab.entries[tabIdx.coerceIn(0, MainTab.entries.size - 1)]
-        set(v) { tabIdx = MainTab.entries.indexOf(v).coerceAtLeast(0) }
+    val tab = MainTab.entries[tabIdx.coerceIn(0, MainTab.entries.size - 1)]
+    fun setTab(v: MainTab) { tabIdx = MainTab.entries.indexOf(v).coerceAtLeast(0) }
     val act = LocalContext.current as? Activity
     var lastBack by remember { mutableLongStateOf(0L) }
     BackHandler {
@@ -385,28 +383,22 @@ fun HomeScreen(
             Toast.makeText(act, "Çıkmak için tekrar bas", Toast.LENGTH_SHORT).show()
         }
     }
-    val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
 
     Box(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
-        androidx.compose.runtime.saveable.SaveableStateProvider(tab.ordinal, content = {
+        androidx.compose.runtime.key(tabIdx) {
             when (tab) {
-                MainTab.HOME -> holder.SaveableStateProvider(0) {
+                MainTab.HOME ->
                     DiscoverTab(session, onSourceSwitch, onSearch, onPlayChannel, onOpenMovie, onOpenSeries)
-                }
-                MainTab.TV -> holder.SaveableStateProvider(1) {
+                MainTab.TV ->
                     TvTab(session, onSearch, onPlayChannel)
-                }
-                MainTab.MOVIES -> holder.SaveableStateProvider(2) {
+                MainTab.MOVIES ->
                     MovieTab(session, onSearch, onOpenMovie)
-                }
-                MainTab.SERIES -> holder.SaveableStateProvider(3) {
+                MainTab.SERIES ->
                     SeriesTab(session, onSearch, onOpenSeries)
-                }
-                MainTab.SETTINGS -> holder.SaveableStateProvider(4) {
+                MainTab.SETTINGS ->
                     SettingsTab(session, onRefresh, onSourceSwitch, onLogout)
-                }
             }
-        })
+        }
         // yuzen cam alt menu (opak + cizgili)
         Row(
             Modifier.align(Alignment.BottomCenter)
@@ -421,7 +413,7 @@ fun HomeScreen(
                 Column(
                     Modifier.weight(1f).clip(RoundedCornerShape(22.dp))
                         .background(if (on) Color.White.copy(alpha = 0.12f) else Color.Transparent)
-                        .clickableNoRipple { tab = t }
+                        .clickableNoRipple { setTab(t) }
                         .padding(vertical = 7.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
