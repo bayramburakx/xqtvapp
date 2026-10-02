@@ -47,8 +47,8 @@ private val LiveResizeModes = listOf(
 fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val view = LocalView.current
-    var currentUrl by remember { mutableStateOf(req.url) }
-    var triedAlt by remember { mutableStateOf(false) }
+    var currentUrl by remember(req) { mutableStateOf(req.url) }
+    var triedAlt by remember(req) { mutableStateOf(false) }
     var autoNote by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var buffering by remember { mutableStateOf(true) }
