@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -21,6 +22,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -292,32 +295,27 @@ fun AppNav() {
         }
     }
 
-    if (searchOpen && session != null) {
-        SearchScreen(
-            session = session!!,
-            onClose = { searchOpen = false },
-            onPlayChannel = { ch, url, alt, h -> searchOpen = false; openPlay(ch, url, alt, h) },
-            onOpenMovie = { searchOpen = false; movieDetail = it },
-            onOpenSeries = { searchOpen = false; seriesDetail = it }
-        )
-    }
-
-    if (play != null) {
-        PlayerScreen(req = play!!, onBack = { play = null })
-    }
-    if (movieDetail != null && session != null) {
-        MovieDetailScreen(
+    // overlay'ler ozel: ayni anda tek ekran (player detayin ustunu ortmez, yerine gecer)
+    when {
+        play != null -> PlayerScreen(req = play!!, onBack = { play = null })
+        movieDetail != null && session != null -> MovieDetailScreen(
             movie = movieDetail!!, session = session!!,
             onBack = { movieDetail = null },
             onSelect = { movieDetail = it },
             onPlay = { url, ms, h -> openMoviePlay(movieDetail!!, url, ms, h) }
         )
-    }
-    if (seriesDetail != null && session != null) {
-        SeriesDetailScreen(
+        seriesDetail != null && session != null -> SeriesDetailScreen(
             entry = seriesDetail!!, session = session!!,
             onBack = { seriesDetail = null },
+            onSelect = { seriesDetail = it },
             onPlayEpisode = { name, cover, eps, idx, ms -> openEpisode(name, cover, eps, idx, ms) }
+        )
+        searchOpen && session != null -> SearchScreen(
+            session = session!!,
+            onClose = { searchOpen = false },
+            onPlayChannel = { ch, url, alt, h -> searchOpen = false; openPlay(ch, url, alt, h) },
+            onOpenMovie = { searchOpen = false; movieDetail = it },
+            onOpenSeries = { searchOpen = false; seriesDetail = it }
         )
     }
 }
@@ -363,12 +361,13 @@ fun HomeScreen(
             MainTab.SERIES -> SeriesTab(session, onOpenSeries)
             MainTab.SETTINGS -> SettingsTab(session, onRefresh, onSourceSwitch, onLogout)
         }
-        // yuzen cam alt menu
+        // yuzen cam alt menu (opak + cizgili)
         Row(
             Modifier.align(Alignment.BottomCenter)
                 .padding(start = 14.dp, end = 14.dp, bottom = 14.dp)
                 .clip(RoundedCornerShape(30.dp))
-                .background(Color(0x9E20202C))
+                .background(Color(0xF214141D))
+                .border(1.dp, PLine, RoundedCornerShape(30.dp))
                 .padding(8.dp)
         ) {
             MainTab.entries.forEach { t ->
@@ -565,7 +564,17 @@ private fun HeroSlider(
         out.take(5)
     }
     if (slides.isEmpty()) return
+    val glowPalette = remember {
+        listOf(
+            Color(0xFF4B35D6), Color(0xFFFF7A45), Color(0xFF18C6B0),
+            Color(0xFFF2B84B), Color(0xFFE84A8F), Color(0xFF4AA3FF)
+        )
+    }
     val pager = rememberPagerState(pageCount = { slides.size })
+    val glow by animateColorAsState(
+        glowPalette[kotlin.math.abs(slides[pager.currentPage].key.hashCode()) % glowPalette.size],
+        animationSpec = tween(600), label = "glow"
+    )
     LaunchedEffect(pager, slides.size) {
         while (slides.size > 1) {
             try {
@@ -574,7 +583,17 @@ private fun HeroSlider(
             } catch (_: Exception) { break }
         }
     }
-    Column {
+    Box {
+        Box(
+            Modifier.fillMaxWidth().height(340.dp).align(Alignment.TopCenter)
+                .background(
+                    Brush.radialGradient(
+                        listOf(glow.copy(alpha = 0.55f), Color.Transparent),
+                        radius = 900f
+                    )
+                )
+        )
+        Column {
         HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 16.dp), pageSpacing = 12.dp) { i ->
             val s = slides[i]
@@ -637,6 +656,7 @@ private fun HeroSlider(
                         else Color.White.copy(alpha = 0.45f)
                     ))
             }
+        }
         }
     }
 }
@@ -774,6 +794,57 @@ fun ContinueCard(title: String, sub: String, logo: String, progress: Float, onCl
 }
 
 @Composable
+fun FeatBanner(title: String, sub: String, tag: String, art: String, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().height(300.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(tileBrush(title))
+            .clickableNoRipple(onClick)
+    ) {
+        if (art.isNotBlank()) {
+            AsyncImage(model = art, contentDescription = null,
+                modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        }
+        Box(Modifier.fillMaxSize().background(
+            Brush.verticalGradient(listOf(Color.Transparent, Color(0xE605050C)))
+        ))
+        Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
+            Box(Modifier.clip(RoundedCornerShape(99.dp))
+                .background(Color.White.copy(alpha = 0.18f))
+                .padding(11.dp, 5.dp)) {
+                Text(tag, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(title, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
+                color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(sub, fontSize = 14.sp, color = Color.White.copy(alpha = 0.75f),
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+fun GridPosterCell(title: String, art: String, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clickableNoRipple(onClick),
+        horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+            .clip(RoundedCornerShape(16.dp))
+            .background(tileBrush(title))) {
+            if (art.isNotBlank()) {
+                AsyncImage(model = art, contentDescription = null,
+                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+            Box(Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color.Transparent, Color(0xBF000000)))
+            ))
+            Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 15.sp,
+                modifier = Modifier.align(Alignment.BottomStart).padding(10.dp))
+        }
+    }
+}
+
+@Composable
 fun PosterCard128(title: String, logo: String, onClick: () -> Unit) {
     Column(Modifier.width(128.dp).clickableNoRipple(onClick),
         horizontalAlignment = Alignment.CenterHorizontally) {
@@ -890,7 +961,14 @@ fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
     val list = session.movies.filter {
         (cat == "Tümü" || it.genre == cat) && (q.isBlank() || it.name.contains(q, true))
     }
-    val feat = list.firstOrNull()
+    val feat = remember(list) { list.firstOrNull() }
+    val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    var shown by remember(list) { mutableIntStateOf(60) }
+    val lastVis = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+    LaunchedEffect(lastVis, list.size) {
+        if (lastVis >= shown - 12 && shown < list.size) shown = (shown + 60).coerceAtMost(list.size)
+    }
+    val shownList = remember(list, shown) { list.take(shown) }
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
             verticalAlignment = Alignment.Bottom) {
@@ -907,36 +985,40 @@ fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
                     shape = RoundedCornerShape(99.dp))
             }
         }
-        if (feat != null && q.isBlank() && cat == "Tümü") {
-            Box(
-                Modifier.fillMaxWidth().padding(20.dp, 8.dp, 20.dp, 0.dp).height(300.dp)
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(tileBrush(feat.id))
-                    .clickableNoRipple { onOpenMovie(feat) }
-            ) {
-                if (feat.logo.isNotBlank()) {
-                    AsyncImage(model = feat.logo, contentDescription = null,
-                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                }
-                Box(Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xE605050C)))
-                ))
-                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-                    Text("Öne çıkan", color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Text(feat.name, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
-                        color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(feat.genre, fontSize = 14.sp, color = Color.White.copy(alpha = 0.75f))
-                }
-            }
-        }
-        LazyVerticalGrid(columns = GridCells.Fixed(3),
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(3),
+            state = gridState,
             contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 110.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f)) {
-            items(list, key = { it.id }) { m ->
-                PosterCard128(m.name, m.logo) { onOpenMovie(m) }
+            modifier = Modifier.weight(1f)
+        ) {
+            if (feat != null && q.isBlank() && cat == "Tümü") {
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    FeatBanner(title = feat.name, sub = feat.genre, tag = "Öne çıkan",
+                        art = feat.logo) { onOpenMovie(feat) }
+                }
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    Column {
+                        SectionHead("Yeni eklenenler", 0)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(list.take(8), key = { it.id }) { m ->
+                                PosterCard128(m.name, m.logo) { onOpenMovie(m) }
+                            }
+                        }
+                        SectionHead(if (cat == "Tümü") "Tüm filmler" else cat, list.size)
+                    }
+                }
+            }
+            items(shownList, key = { it.id }) { m ->
+                GridPosterCell(m.name, m.logo) { onOpenMovie(m) }
+            }
+            if (shown < list.size) {
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(28.dp))
+                    }
+                }
             }
         }
     }
@@ -946,7 +1028,14 @@ fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
 fun SeriesTab(session: Session, onOpenSeries: (SeriesEntry) -> Unit) {
     var q by remember { mutableStateOf("") }
     val list = session.series.filter { q.isBlank() || it.name.contains(q, true) }
-    val feat = list.firstOrNull()
+    val feat = remember(list) { list.firstOrNull() }
+    val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    var shown by remember(list) { mutableIntStateOf(60) }
+    val lastVis = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+    LaunchedEffect(lastVis, list.size) {
+        if (lastVis >= shown - 12 && shown < list.size) shown = (shown + 60).coerceAtMost(list.size)
+    }
+    val shownList = remember(list, shown) { list.take(shown) }
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
             verticalAlignment = Alignment.Bottom) {
@@ -958,41 +1047,45 @@ fun SeriesTab(session: Session, onOpenSeries: (SeriesEntry) -> Unit) {
         }
         OutlinedTextField(q, { q = it }, label = { Text("Dizi ara...") },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(14.dp))
-        if (feat != null && q.isBlank()) {
-            Box(
-                Modifier.fillMaxWidth().padding(20.dp, 12.dp, 20.dp, 0.dp).height(300.dp)
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(tileBrush(feat.id))
-                    .clickableNoRipple { onOpenSeries(feat) }
-            ) {
-                if (feat.cover.isNotBlank()) {
-                    AsyncImage(model = feat.cover, contentDescription = null,
-                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                }
-                Box(Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xE605050C)))
-                ))
-                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-                    Text("Yeni sezon", color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Text(feat.name, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
-                        color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${feat.category} • ${feat.episodes.size} bölüm", fontSize = 14.sp,
-                        color = Color.White.copy(alpha = 0.75f))
-                }
-            }
-        }
+            shape = RoundedCornerShape(14.dp), singleLine = true)
         if (session.series.isEmpty()) {
             Text("Bu kaynakta dizi yok.", color = PTx2, modifier = Modifier.padding(20.dp))
+            return@Column
         }
-        LazyVerticalGrid(columns = GridCells.Fixed(3),
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(3),
+            state = gridState,
             contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 110.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f)) {
-            items(list, key = { it.id }) { s ->
-                PosterCard128(s.name, s.cover) { onOpenSeries(s) }
+            modifier = Modifier.weight(1f)
+        ) {
+            if (feat != null && q.isBlank()) {
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    FeatBanner(title = feat.name, sub = feat.category, tag = "Yeni sezon",
+                        art = feat.cover) { onOpenSeries(feat) }
+                }
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    Column {
+                        SectionHead("Yeni bölümler", 0)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(list.take(8), key = { it.id }) { s ->
+                                PosterCard128(s.name, s.cover) { onOpenSeries(s) }
+                            }
+                        }
+                        SectionHead("Tüm diziler", list.size)
+                    }
+                }
+            }
+            items(shownList, key = { it.id }) { s ->
+                GridPosterCell(s.name, s.cover) { onOpenSeries(s) }
+            }
+            if (shown < list.size) {
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(28.dp))
+                    }
+                }
             }
         }
     }
@@ -1010,6 +1103,7 @@ fun SettingsTab(
     val autoplay by FavoritesStore.autoplayFlow(ctx).collectAsState(initial = true)
     val (audioPref, subPref) = FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off")).value
     var confirmDelete by remember { mutableStateOf(false) }
+    var avDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
         Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
@@ -1050,7 +1144,7 @@ fun SettingsTab(
                     "en" -> "İngilizce"
                     else -> "Otomatik"
                 }
-            ) { }
+            ) { avDialog = true }
             SettingsRow(
                 "Varsayılan altyazı",
                 when (subPref) {
@@ -1059,7 +1153,7 @@ fun SettingsTab(
                     "auto" -> "Otomatik"
                     else -> "Kapalı"
                 }
-            ) { }
+            ) { avDialog = true }
             SettingsRow("Kaynak değiştir", "Kayıtlı listeler") { onSourceSwitch() }
             if (!confirmDelete) {
                 SettingsRow("Kaynağı sil", "Bu cihazdan kaldır", danger = true) {
@@ -1080,8 +1174,53 @@ fun SettingsTab(
             Spacer(Modifier.height(20.dp))
             Text("Portio v2.0 • Tüm yayınların tek yerde.",
                 color = PTx2, fontSize = 12.sp)
+            if (avDialog) {
+                AlertDialog(
+                    onDismissRequest = { avDialog = false },
+                    title = { Text("Ses ve altyazı", fontSize = 18.sp) },
+                    text = {
+                        Column {
+                            Text("Ses", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            AvPrefRow("Otomatik ses", audioPref == "auto") {
+                                scope.launch { FavoritesStore.setTrackPrefs(ctx, "auto", subPref) }
+                            }
+                            AvPrefRow("Türkçe dublaj", audioPref == "tr") {
+                                scope.launch { FavoritesStore.setTrackPrefs(ctx, "tr", subPref) }
+                            }
+                            AvPrefRow("Orijinal dil (İngilizce)", audioPref == "en") {
+                                scope.launch { FavoritesStore.setTrackPrefs(ctx, "en", subPref) }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text("Altyazı", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            AvPrefRow("Kapalı", subPref == "off") {
+                                scope.launch { FavoritesStore.setTrackPrefs(ctx, audioPref, "off") }
+                            }
+                            AvPrefRow("Otomatik", subPref == "auto") {
+                                scope.launch { FavoritesStore.setTrackPrefs(ctx, audioPref, "auto") }
+                            }
+                            AvPrefRow("Türkçe", subPref == "tr") {
+                                scope.launch { FavoritesStore.setTrackPrefs(ctx, audioPref, "tr") }
+                            }
+                            AvPrefRow("İngilizce", subPref == "en") {
+                                scope.launch { FavoritesStore.setTrackPrefs(ctx, audioPref, "en") }
+                            }
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = { avDialog = false }) { Text("Kapat") } }
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun AvPrefRow(label: String, on: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickableNoRipple(onClick).padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        RadioButton(selected = on, onClick = onClick)
+    }
+    HorizontalDivider(color = PLine)
 }
 
 @Composable
