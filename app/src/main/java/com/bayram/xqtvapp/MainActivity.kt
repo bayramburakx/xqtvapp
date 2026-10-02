@@ -1361,7 +1361,7 @@ fun SettingsTab(
                 )
             }
             Spacer(Modifier.height(20.dp))
-            Text("Portio v2.8.2 • Tüm yayınların tek yerde.",
+            Text("Portio v2.8.3 • Tüm yayınların tek yerde.",
                 color = PTx2, fontSize = 12.sp)
             if (avDialog) {
                 AlertDialog(

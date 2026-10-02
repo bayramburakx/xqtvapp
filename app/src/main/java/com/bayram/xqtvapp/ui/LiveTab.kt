@@ -2,6 +2,7 @@ package com.bayram.xqtvapp.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -49,6 +50,10 @@ import java.util.Date
 import java.util.Locale
 
 private val LiveGold = Color(0xFFFFD60A)
+
+// Rehberde tek seferde cekilecek max kanal: tum kategori kaydirilabilir,
+// asiri paralel istek saglayiciyi bogmaz ve telefonu isitmaz.
+private const val GUIDE_ROW_CAP = 40
 
 /**
  * Canli TV sayfasi: Kanallar / Program rehberi sekmeleri,
@@ -334,6 +339,7 @@ private fun LiveBadgeMini() {
 
 // ==================== PROGRAM REHBERİ ====================
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EpgGuide(
     session: Session,
@@ -344,14 +350,17 @@ private fun EpgGuide(
     val ctx = LocalContext.current
     var days by remember { mutableStateOf<Map<String, List<EpgEntry>>>(emptyMap()) }
     var guideDone by remember { mutableStateOf(false) }
-    // Rehber kullanici istegiyle acilir: internet yedegi burada serbest (max 8 kanal, 3 paralel)
-    LaunchedEffect(list, session.sourceId) {
+    // Tum kategori gosterilir (ilk 8 degil): satirlar hemen cizilir, EPG
+    // bitince karta duser. 40 satir cap + 3 paralel = isinma yok.
+    val rows = remember(list) { list.take(GUIDE_ROW_CAP) }
+    // Rehber kullanici istegiyle acilir: internet yedegi burada serbest (3 paralel)
+    LaunchedEffect(rows, session.sourceId) {
         guideDone = false
         days = emptyMap()
         try {
             val sem = kotlinx.coroutines.sync.Semaphore(3)
-            coroutineScope {
-                list.take(8).map { ch ->
+            val fetched = coroutineScope {
+                rows.map { ch ->
                     async(Dispatchers.IO) {
                         sem.acquire()
                         try {
@@ -361,10 +370,13 @@ private fun EpgGuide(
                             ch.id to l
                         } finally { sem.release() }
                     }
-                }.awaitAll().forEach { (id, l) ->
-                    if (l.isNotEmpty()) days = days + (id to l)
-                }
+                }.awaitAll()
             }
+            val done = mutableMapOf<String, List<EpgEntry>>()
+            fetched.forEach { (id, l) ->
+                if (l.isNotEmpty()) done[id] = l
+            }
+            days = done
         } catch (_: Exception) { }
         guideDone = true
     }
@@ -376,32 +388,41 @@ private fun EpgGuide(
     val winEnd = winStart + 4 * 3600
     val pxPerSec = 0.14f
     val hScroll = rememberScrollState()
-    val rows = remember(list) { list.take(8) }
+    val timeW = ((winEnd - winStart) * pxPerSec).dp
 
-    Column(modifier.verticalScroll(rememberScrollState())) {
-        // saat basligi (logo sutunuyla hizali 64dp bosluk)
-        Row {
-            Spacer(Modifier.width(64.dp))
-            Row(Modifier.horizontalScroll(hScroll)) {
-                Box(Modifier.width((((winEnd - winStart) * pxPerSec).dp)).height(34.dp)) {
-                    var hh = winStart
-                    while (hh < winEnd) {
-                        Box(
-                            Modifier.offset(x = ((hh - winStart) * pxPerSec).dp)
-                                .padding(start = 8.dp)
-                        ) {
-                            Text(
-                                SimpleDateFormat("HH:mm", Locale.getDefault())
-                                    .format(Date(hh * 1000)),
-                                fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PTx2
-                            )
+    // Dikey kaydirma: ice ice Column+verticalScroll yerine LazyColumn.
+    // Boylece kategori kac kanal olursa olsun (cap 40) asagiya kayar.
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(bottom = 16.dp)
+    ) {
+        // saat basligi (logo sutunuyla hizali 64dp bosluk), kaydirinca ustte sabit
+        stickyHeader {
+            Row(
+                Modifier.fillMaxWidth().background(Color(0xFF0B0B12))
+            ) {
+                Spacer(Modifier.width(64.dp))
+                Row(Modifier.horizontalScroll(hScroll)) {
+                    Box(Modifier.width(timeW).height(34.dp)) {
+                        var hh = winStart
+                        while (hh < winEnd) {
+                            Box(
+                                Modifier.offset(x = ((hh - winStart) * pxPerSec).dp)
+                                    .padding(start = 8.dp)
+                            ) {
+                                Text(
+                                    SimpleDateFormat("HH:mm", Locale.getDefault())
+                                        .format(Date(hh * 1000)),
+                                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PTx2
+                                )
+                            }
+                            hh += 3600
                         }
-                        hh += 3600
                     }
                 }
             }
         }
-        rows.forEach { ch ->
+        items(rows, key = { it.id }) { ch ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.width(64.dp).height(64.dp), contentAlignment = Alignment.Center) {
                     if (ch.logo.isNotBlank()) {
@@ -417,7 +438,7 @@ private fun EpgGuide(
                     }
                 }
                 Row(Modifier.weight(1f).horizontalScroll(hScroll)) {
-                    Box(Modifier.width(((winEnd - winStart) * pxPerSec).dp).height(64.dp)) {
+                    Box(Modifier.width(timeW).height(64.dp)) {
                         val progs = (days[ch.id] ?: emptyList())
                             .filter { it.endEpoch > winStart && it.startEpoch < winEnd }
                         if (progs.isEmpty()) {
@@ -463,6 +484,5 @@ private fun EpgGuide(
             }
             HorizontalDivider(color = PLine)
         }
-        Spacer(Modifier.height(16.dp))
     }
 }
