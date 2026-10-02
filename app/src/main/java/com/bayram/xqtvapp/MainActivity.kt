@@ -11,6 +11,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,6 +39,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -357,8 +360,8 @@ fun HomeScreen(
         when (tab) {
             MainTab.HOME -> DiscoverTab(session, onSourceSwitch, onSearch, onPlayChannel, onOpenMovie, onOpenSeries)
             MainTab.TV -> TvTab(session, onPlayChannel)
-            MainTab.MOVIES -> MovieTab(session, onOpenMovie)
-            MainTab.SERIES -> SeriesTab(session, onOpenSeries)
+            MainTab.MOVIES -> MovieTab(session, onSearch, onOpenMovie)
+            MainTab.SERIES -> SeriesTab(session, onSearch, onOpenSeries)
             MainTab.SETTINGS -> SettingsTab(session, onRefresh, onSourceSwitch, onLogout)
         }
         // yuzen cam alt menu (opak + cizgili)
@@ -438,6 +441,8 @@ fun DiscoverTab(
     val recents by FavoritesStore.recentFlow(ctx).collectAsState(initial = emptyList())
     val resumeMap by FavoritesStore.resumeFlow(ctx).collectAsState(initial = emptyMap())
     var busy by remember { mutableStateOf<String?>(null) }
+    var glowColor by remember { mutableStateOf(Color(0xFF4B35D6)) }
+    val glowAnim by animateColorAsState(glowColor, animationSpec = tween(800), label = "homeGlow")
 
     fun openLive(ch: StalkerChannel) {
         scope.launch {
@@ -457,10 +462,12 @@ fun DiscoverTab(
         }
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
-        contentPadding = PaddingValues(bottom = 110.dp)
-    ) {
+    Box(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
+        FullGlow(glowAnim)
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 110.dp)
+        ) {
         item {
             HomeHeader(
                 sourceName = session.sourceName.ifBlank { session.label },
@@ -472,7 +479,12 @@ fun DiscoverTab(
                 onSourceSwitch = onSourceSwitch, onSearch = onSearch
             )
         }
-        item { HeroSlider(session, busyId = busy, onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries, onOpenLive = { openLive(it) }) }
+        item {
+            HeroSlider(session, busyId = busy,
+                onGlow = { glowColor = it },
+                onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries,
+                onOpenLive = { openLive(it) })
+        }
 
         if (recents.isNotEmpty()) {
             item {
@@ -528,16 +540,34 @@ fun DiscoverTab(
             }
         }
         item { Spacer(Modifier.height(8.dp)) }
+        }
     }
 }
 
 // ==================== HERO SLIDER ====================
+
+@Composable
+private fun FullGlow(color: Color) {
+    Box(
+        Modifier.fillMaxWidth().height(560.dp)
+            .drawBehind {
+                drawRect(
+                    Brush.radialGradient(
+                        listOf(color.copy(alpha = 0.5f), Color.Transparent),
+                        center = androidx.compose.ui.geometry.Offset(size.width / 2f, 0f),
+                        radius = size.width * 1.1f
+                    )
+                )
+            }
+    )
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HeroSlider(
     session: Session,
     busyId: String?,
+    onGlow: (Color) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit,
     onOpenLive: (StalkerChannel) -> Unit
@@ -571,10 +601,11 @@ private fun HeroSlider(
         )
     }
     val pager = rememberPagerState(pageCount = { slides.size })
-    val glow by animateColorAsState(
-        glowPalette[kotlin.math.abs(slides[pager.currentPage].key.hashCode()) % glowPalette.size],
-        animationSpec = tween(600), label = "glow"
-    )
+    LaunchedEffect(pager.currentPage, slides.size) {
+        if (slides.isNotEmpty()) {
+            onGlow(glowPalette[kotlin.math.abs(slides[pager.currentPage].key.hashCode()) % glowPalette.size])
+        }
+    }
     LaunchedEffect(pager, slides.size) {
         while (slides.size > 1) {
             try {
@@ -583,17 +614,7 @@ private fun HeroSlider(
             } catch (_: Exception) { break }
         }
     }
-    Box {
-        Box(
-            Modifier.fillMaxWidth().height(340.dp).align(Alignment.TopCenter)
-                .background(
-                    Brush.radialGradient(
-                        listOf(glow.copy(alpha = 0.55f), Color.Transparent),
-                        radius = 900f
-                    )
-                )
-        )
-        Column {
+    Column {
         HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 16.dp), pageSpacing = 12.dp) { i ->
             val s = slides[i]
@@ -656,7 +677,6 @@ private fun HeroSlider(
                         else Color.White.copy(alpha = 0.45f)
                     ))
             }
-        }
         }
     }
 }
@@ -791,6 +811,37 @@ fun ContinueCard(title: String, sub: String, logo: String, progress: Float, onCl
             }
         }
     }
+}
+
+@Composable
+fun CatChips(cats: List<String>, selected: String, onSelect: (String) -> Unit) {
+    LazyRow(contentPadding = PaddingValues(20.dp, 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(cats) { c ->
+            FilterChip(
+                selected = selected == c,
+                onClick = { onSelect(c) },
+                label = { Text(c) },
+                shape = RoundedCornerShape(99.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Color.White,
+                    selectedLabelColor = Color.Black
+                )
+            )
+        }
+    }
+}
+
+/** Kaydirmali ray (az ogeli listelerde ic ice lazy yerine: kasmayi onler). */
+@Composable
+fun RailRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        content = content
+    )
 }
 
 @Composable
@@ -934,13 +985,7 @@ fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?, Map
         OutlinedTextField(q, { q = it }, label = { Text("Kanal ara...") },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
             shape = RoundedCornerShape(14.dp))
-        LazyRow(contentPadding = PaddingValues(20.dp, 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(cats) { c ->
-                FilterChip(selected = cat == c, onClick = { cat = c }, label = { Text(c) },
-                    shape = RoundedCornerShape(99.dp))
-            }
-        }
+        CatChips(cats, cat) { cat = it }
         LazyVerticalGrid(columns = GridCells.Adaptive(160.dp),
             contentPadding = PaddingValues(20.dp, 8.dp, 20.dp, 110.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -954,14 +999,15 @@ fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?, Map
 }
 
 @Composable
-fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
-    var q by remember { mutableStateOf("") }
+@OptIn(ExperimentalFoundationApi::class)
+fun MovieTab(session: Session, onSearch: () -> Unit, onOpenMovie: (StalkerChannel) -> Unit) {
     var cat by remember { mutableStateOf("Tümü") }
     val cats = remember(session) { listOf("Tümü") + session.movies.map { it.genre }.distinct().sorted() }
-    val list = session.movies.filter {
-        (cat == "Tümü" || it.genre == cat) && (q.isBlank() || it.name.contains(q, true))
+    val list = remember(session, cat) {
+        session.movies.filter { cat == "Tümü" || it.genre == cat }
     }
-    val feat = remember(list) { list.firstOrNull() }
+    val feat = remember(list) { list.take(3) }
+    val pager = rememberPagerState(pageCount = { feat.size.coerceAtLeast(1) })
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     var shown by remember(list) { mutableIntStateOf(60) }
     val lastVis = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -971,20 +1017,18 @@ fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
     val shownList = remember(list, shown) { list.take(shown) }
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
-            verticalAlignment = Alignment.Bottom) {
+            verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Filmler", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
                     letterSpacing = (-1.5).sp)
                 Text("${list.size} film", color = PTx2, fontSize = 14.sp)
             }
-        }
-        LazyRow(contentPadding = PaddingValues(20.dp, 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(cats) { c ->
-                FilterChip(selected = cat == c, onClick = { cat = c }, label = { Text(c) },
-                    shape = RoundedCornerShape(99.dp))
+            Box(Modifier.size(38.dp).clip(CircleShape).background(PGlass)
+                .clickableNoRipple(onSearch), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Search, "Ara", tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
+        CatChips(cats, cat) { cat = it }
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
             state = gridState,
@@ -993,16 +1037,32 @@ fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f)
         ) {
-            if (feat != null && q.isBlank() && cat == "Tümü") {
+            if (feat.isNotEmpty()) {
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    FeatBanner(title = feat.name, sub = feat.genre, tag = "Öne çıkan",
-                        art = feat.logo) { onOpenMovie(feat) }
+                    Column {
+                        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth()) { i ->
+                            val f = feat[i % feat.size]
+                            FeatBanner(title = f.name, sub = f.genre, tag = "Öne çıkan",
+                                art = f.logo) { onOpenMovie(f) }
+                        }
+                        Row(Modifier.fillMaxWidth().padding(top = 10.dp),
+                            horizontalArrangement = Arrangement.Center) {
+                            repeat(feat.size) { i ->
+                                Box(Modifier.padding(3.dp)
+                                    .then(if (i == pager.currentPage) Modifier.width(20.dp).height(6.dp)
+                                    else Modifier.size(6.dp))
+                                    .clip(RoundedCornerShape(99.dp))
+                                    .background(if (i == pager.currentPage) Color.White
+                                    else Color.White.copy(alpha = 0.45f)))
+                            }
+                        }
+                    }
                 }
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Column {
                         SectionHead("Yeni eklenenler", 0)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            items(list.take(8), key = { it.id }) { m ->
+                        RailRow {
+                            list.take(8).forEach { m ->
                                 PosterCard128(m.name, m.logo) { onOpenMovie(m) }
                             }
                         }
@@ -1024,11 +1084,15 @@ fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
     }
 }
 
-@Composable
-fun SeriesTab(session: Session, onOpenSeries: (SeriesEntry) -> Unit) {
-    var q by remember { mutableStateOf("") }
-    val list = session.series.filter { q.isBlank() || it.name.contains(q, true) }
-    val feat = remember(list) { list.firstOrNull() }
+@OptIn(ExperimentalFoundationApi::class)
+fun SeriesTab(session: Session, onSearch: () -> Unit, onOpenSeries: (SeriesEntry) -> Unit) {
+    var cat by remember { mutableStateOf("Tümü") }
+    val cats = remember(session) { listOf("Tümü") + session.series.map { it.category }.distinct().sorted() }
+    val list = remember(session, cat) {
+        session.series.filter { cat == "Tümü" || it.category == cat }
+    }
+    val feat = remember(list) { list.take(3) }
+    val pager = rememberPagerState(pageCount = { feat.size.coerceAtLeast(1) })
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     var shown by remember(list) { mutableIntStateOf(60) }
     val lastVis = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -1038,16 +1102,18 @@ fun SeriesTab(session: Session, onOpenSeries: (SeriesEntry) -> Unit) {
     val shownList = remember(list, shown) { list.take(shown) }
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
-            verticalAlignment = Alignment.Bottom) {
+            verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Diziler", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
                     letterSpacing = (-1.5).sp)
                 Text("${list.size} dizi", color = PTx2, fontSize = 14.sp)
             }
+            Box(Modifier.size(38.dp).clip(CircleShape).background(PGlass)
+                .clickableNoRipple(onSearch), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Search, "Ara", tint = Color.White, modifier = Modifier.size(18.dp))
+            }
         }
-        OutlinedTextField(q, { q = it }, label = { Text("Dizi ara...") },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(14.dp), singleLine = true)
+        CatChips(cats, cat) { cat = it }
         if (session.series.isEmpty()) {
             Text("Bu kaynakta dizi yok.", color = PTx2, modifier = Modifier.padding(20.dp))
             return@Column
@@ -1060,16 +1126,32 @@ fun SeriesTab(session: Session, onOpenSeries: (SeriesEntry) -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f)
         ) {
-            if (feat != null && q.isBlank()) {
+            if (feat.isNotEmpty()) {
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                    FeatBanner(title = feat.name, sub = feat.category, tag = "Yeni sezon",
-                        art = feat.cover) { onOpenSeries(feat) }
+                    Column {
+                        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth()) { i ->
+                            val s = feat[i % feat.size]
+                            FeatBanner(title = s.name, sub = s.category, tag = "Yeni sezon",
+                                art = s.cover) { onOpenSeries(s) }
+                        }
+                        Row(Modifier.fillMaxWidth().padding(top = 10.dp),
+                            horizontalArrangement = Arrangement.Center) {
+                            repeat(feat.size) { i ->
+                                Box(Modifier.padding(3.dp)
+                                    .then(if (i == pager.currentPage) Modifier.width(20.dp).height(6.dp)
+                                    else Modifier.size(6.dp))
+                                    .clip(RoundedCornerShape(99.dp))
+                                    .background(if (i == pager.currentPage) Color.White
+                                    else Color.White.copy(alpha = 0.45f)))
+                            }
+                        }
+                    }
                 }
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Column {
                         SectionHead("Yeni bölümler", 0)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            items(list.take(8), key = { it.id }) { s ->
+                        RailRow {
+                            list.take(8).forEach { s ->
                                 PosterCard128(s.name, s.cover) { onOpenSeries(s) }
                             }
                         }
@@ -1268,6 +1350,8 @@ fun SearchScreen(
     val scope = rememberCoroutineScope()
     var q by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf<String?>(null) }
+    var glowColor by remember { mutableStateOf(Color(0xFF4B35D6)) }
+    val glowAnim by animateColorAsState(glowColor, animationSpec = tween(800), label = "homeGlow")
 
     fun openLive(ch: StalkerChannel) {
         scope.launch {
