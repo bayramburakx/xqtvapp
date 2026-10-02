@@ -580,7 +580,6 @@ fun SeriesDetailScreen(
                     }
                 }
             }
-            }
             item { Spacer(Modifier.height(50.dp)) }
         }
 
