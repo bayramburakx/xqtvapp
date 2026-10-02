@@ -85,7 +85,7 @@ suspend fun loadSource(
             val ch = all.filter { it.genre != "VOD" }.ifEmpty { all }
             val vod = all.filter { it.genre == "VOD" }
             onStep("movies", ch.size, vod.size, 0)
-            Session(src.name, ch, vod, emptyList(), sourceId = src.id, sourceName = src.name)
+            Session(src.name, ch, vod, emptyList(), m3uUrl = src.url.trim(), sourceId = src.id, sourceName = src.name)
         }
     }
     // yeni icerik sayisi
@@ -126,7 +126,8 @@ suspend fun loadM3uSession(url: String): Session {
     val text = M3uParser.download(url.trim())
     val all = M3uParser.parse(text)
     if (all.isEmpty()) throw Exception("Listede içerik bulunamadı")
-    return Session("M3U", all.filter { it.genre != "VOD" }.ifEmpty { all }, all.filter { it.genre == "VOD" }, emptyList())
+    val ch = all.filter { it.genre != "VOD" }.ifEmpty { all }
+    return Session("M3U", ch, all.filter { it.genre == "VOD" }, emptyList(), m3uUrl = url.trim())
 }
 
 suspend fun markLastSource(ctx: Context, which: String) {
