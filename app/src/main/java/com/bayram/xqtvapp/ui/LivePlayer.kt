@@ -48,7 +48,9 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.bayram.xqtvapp.PlayReq
+import com.bayram.xqtvapp.Session
 import com.bayram.xqtvapp.data.EpgCache
+import com.bayram.xqtvapp.data.EpgXml
 import com.bayram.xqtvapp.data.EpgEntry
 import com.bayram.xqtvapp.data.FavoritesStore
 import com.bayram.xqtvapp.data.StalkerChannel
@@ -90,6 +92,7 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
     var currentAlt by remember(req) { mutableStateOf(req.altUrl) }
     var currentHeaders by remember(req) { mutableStateOf(req.headers) }
     var triedAlt by remember(req) { mutableStateOf(false) }
+    var zapping by remember(req) { mutableStateOf(false) }
     var autoNote by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var buffering by remember { mutableStateOf(true) }
@@ -121,16 +124,15 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
         onDispose { view.keepScreenOn = false }
     }
 
-    // EPG: gecerli kanal icin gunluk akis
+    // EPG: gecerli kanal icin gunluk akis (kaynak + internet XMLTV yedegi)
     LaunchedEffect(currentCh?.id) {
         dayEpg = emptyList()
         val ch = currentCh ?: return@LaunchedEffect
-        if (req.xServer.isBlank()) return@LaunchedEffect
         try {
-            val sid = ch.id.removePrefix("live_")
-            if (sid == ch.id) return@LaunchedEffect
-            val x = XtreamClient(req.xServer, req.xUser, req.xPass)
-            dayEpg = EpgCache.getDay(x, sid)
+            val s = Session("", emptyList(), emptyList(), emptyList(),
+                xServer = req.xServer, xUser = req.xUser, xPass = req.xPass,
+                m3uUrl = req.m3uUrl)
+            dayEpg = EpgXml.lookupDay(ctx, s, ch)
         } catch (_: Exception) { }
     }
     val nowEpg = remember(dayEpg) { epgNow(dayEpg) }
@@ -222,9 +224,10 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
 
     fun zapTo(idx: Int) {
         val list = req.zap
-        if (list.isEmpty()) return
+        if (list.isEmpty() || zapping) return
         val i = ((idx % list.size) + list.size) % list.size
         val target = list[i]
+        zapping = true
         buffering = true
         errorMsg = null
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -244,6 +247,7 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
                     }
                 }
             } catch (_: Exception) { buffering = false }
+            zapping = false
         }
     }
 
@@ -265,14 +269,14 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
                 },
                 update = { it.resizeMode = LiveResizeModes[resizeIdx] },
                 modifier = Modifier.fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(onTap = { poke() })
-                    }
             )
         }
-        // dikey kaydirma ile zap (asagidaki ozel detector)
+        // dokunma + dikey kaydirma tek overlay uzerinde (video ustu)
         Box(
             Modifier.fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { poke() })
+                }
                 .pointerInput(req) {
                     var acc = 0f
                     detectVerticalDragGestures(
@@ -499,8 +503,19 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
             ) {
                 Text("Kanallar", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier.padding(6.dp, 0.dp, 6.dp, 12.dp))
+                var panelQ by remember(req) { mutableStateOf("") }
+                OutlinedTextField(
+                    value = panelQ, onValueChange = { panelQ = it },
+                    placeholder = { Text("Kanal ara...", fontSize = 13.sp) },
+                    singleLine = true, shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                )
+                val panelList = remember(req, panelQ) {
+                    (if (panelQ.isBlank()) req.zap
+                    else req.zap.filter { it.name.contains(panelQ, true) }).take(100)
+                }
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(req.zap, key = { it.id }) { ch ->
+                    items(panelList, key = { it.id }) { ch ->
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                                 .background(if (ch.id == currentCh?.id) Color.White.copy(alpha = 0.1f) else Color.Transparent)
