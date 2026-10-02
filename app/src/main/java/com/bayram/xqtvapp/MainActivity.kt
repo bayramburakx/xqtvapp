@@ -998,7 +998,6 @@ fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?, Map
     }
 }
 
-@Composable
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MovieTab(session: Session, onSearch: () -> Unit, onOpenMovie: (StalkerChannel) -> Unit) {
