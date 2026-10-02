@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -70,6 +71,7 @@ import com.bayram.xqtvapp.ui.PlayerScreen
 import com.bayram.xqtvapp.ui.ProgressLine
 import com.bayram.xqtvapp.ui.SectionHead
 import com.bayram.xqtvapp.ui.SeriesDetailScreen
+import com.bayram.xqtvapp.ui.SourceCard
 import com.bayram.xqtvapp.ui.SourcesScreen
 import com.bayram.xqtvapp.ui.SplashScreen
 import com.bayram.xqtvapp.ui.clickableNoRipple
