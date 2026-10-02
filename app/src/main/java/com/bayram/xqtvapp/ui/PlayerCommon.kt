@@ -198,6 +198,21 @@ object PlayerBackend {
     }
 
     val SUB_SIZES_SP = listOf(15f, 19f, 24f)
+
+    /** Player acikken sistem cubuklarini gizle (tam ekran), cikista geri getir. */
+    fun immersive(view: android.view.View, hide: Boolean) {
+        try {
+            val window = (view.context as? android.app.Activity)?.window ?: return
+            val ctl = androidx.core.view.WindowCompat.getInsetsController(window, view)
+            if (hide) {
+                ctl.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                ctl.systemBarsBehavior =
+                    androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                ctl.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+        } catch (_: Exception) { }
+    }
 }
 
 @Composable
