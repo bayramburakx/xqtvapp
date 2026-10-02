@@ -332,12 +332,13 @@ fun AppNav() {
             onSelect = { seriesDetail = it },
             onPlayEpisode = { name, cover, eps, idx, ms -> openEpisode(name, cover, eps, idx, ms) }
         )
-        searchOpen && session != null -> SearchScreen(
+        searchScope != null && session != null -> SearchScreen(
             session = session!!,
-            onClose = { searchOpen = false },
-            onPlayChannel = { ch, url, alt, h, z, zi -> searchOpen = false; openPlay(ch, url, alt, h, z, zi) },
-            onOpenMovie = { searchOpen = false; movieDetail = it },
-            onOpenSeries = { searchOpen = false; seriesDetail = it }
+            filter = searchScope ?: "all",
+            onClose = { searchScope = null },
+            onPlayChannel = { ch, url, alt, h, z, zi -> searchScope = null; openPlay(ch, url, alt, h, z, zi) },
+            onOpenMovie = { searchScope = null; movieDetail = it },
+            onOpenSeries = { searchScope = null; seriesDetail = it }
         )
     }
 }
@@ -1318,7 +1319,7 @@ private fun SettingsRow(
 @Composable
 fun SearchScreen(
     session: Session,
-    scope: String = "all",
+    filter: String = "all",
     onClose: () -> Unit,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
@@ -1357,9 +1358,9 @@ fun SearchScreen(
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Ara", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold)
-                if (scope != "all") {
+                if (filter != "all") {
                     Text(
-                        when (scope) {
+                        when (filter) {
                             "live" -> "Yalnızca kanallar"
                             "movie" -> "Yalnızca filmler"
                             else -> "Yalnızca diziler"
@@ -1380,11 +1381,11 @@ fun SearchScreen(
             return@Column
         }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(8.dp, 8.dp, 8.dp, 20.dp)) {
-            val chs = if (scope == "all" || scope == "live")
+            val chs = if (filter == "all" || filter == "live")
                 session.channels.filter { it.name.contains(q, true) }.take(30) else emptyList()
-            val mvs = if (scope == "all" || scope == "movie")
+            val mvs = if (filter == "all" || filter == "movie")
                 session.movies.filter { it.name.contains(q, true) }.take(30) else emptyList()
-            val srs = if (scope == "all" || scope == "series")
+            val srs = if (filter == "all" || filter == "series")
                 session.series.filter { it.name.contains(q, true) }.take(20) else emptyList()
             if (chs.isNotEmpty()) {
                 item { Text("Kanallar", fontWeight = FontWeight.Bold,
