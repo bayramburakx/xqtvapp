@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.map
 private val KEY_FAV = stringPreferencesKey("favs_v2")
 private val KEY_RECENT = stringPreferencesKey("recent_v2")
 val KEY_AUTOPLAY = booleanPreferencesKey("autoplay_next")
+private val KEY_WATCHED = stringPreferencesKey("watched_v2")
+val KEY_PREF_AUDIO = stringPreferencesKey("pref_audio")
+val KEY_PREF_SUB = stringPreferencesKey("pref_sub")
 
 private const val FS = "\u001F"
 private const val RS = "\u001E"
@@ -148,5 +151,47 @@ object FavoritesStore {
             if (info.hasValid() && id in epIds) return epIds.indexOf(id)
         }
         return -1
+    }
+
+    // ---------- izlendi durumu ----------
+
+    fun watchedFlow(ctx: Context): Flow<Set<String>> =
+        ctx.dataStore.data.map { prefs ->
+            (prefs[KEY_WATCHED] ?: "").split(RS).filter { it.isNotBlank() }.toSet()
+        }
+
+    suspend fun markWatched(ctx: Context, id: String) {
+        ctx.dataStore.edit { p ->
+            val cur = (p[KEY_WATCHED] ?: "").split(RS).filter { it.isNotBlank() }.toMutableSet()
+            if (cur.add(id)) p[KEY_WATCHED] = cur.joinToString(RS)
+        }
+    }
+
+    suspend fun toggleWatched(ctx: Context, id: String): Boolean {
+        var now = false
+        ctx.dataStore.edit { p ->
+            val cur = (p[KEY_WATCHED] ?: "").split(RS).filter { it.isNotBlank() }.toMutableSet()
+            now = if (cur.contains(id)) {
+                cur.remove(id); false
+            } else {
+                cur.add(id); true
+            }
+            p[KEY_WATCHED] = cur.joinToString(RS)
+        }
+        return now
+    }
+
+    // ---------- ses/altyazi tercihleri ----------
+
+    fun trackPrefsFlow(ctx: Context): Flow<Pair<String, String>> =
+        ctx.dataStore.data.map { p ->
+            Pair(p[KEY_PREF_AUDIO] ?: "auto", p[KEY_PREF_SUB] ?: "off")
+        }
+
+    suspend fun setTrackPrefs(ctx: Context, audio: String, sub: String) {
+        ctx.dataStore.edit {
+            it[KEY_PREF_AUDIO] = audio
+            it[KEY_PREF_SUB] = sub
+        }
     }
 }
