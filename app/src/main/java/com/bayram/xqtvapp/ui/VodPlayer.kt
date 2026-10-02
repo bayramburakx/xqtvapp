@@ -146,7 +146,7 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                             errorMsg = null
                             if (!prefsApplied) {
                                 prefsApplied = true
-                                PlayerBackend.applyTrackPrefs(this, trackPrefs.first, trackPrefs.second)
+                                PlayerBackend.applyTrackPrefs(this@apply, trackPrefs.first, trackPrefs.second)
                             }
                             if (req.startMs > 10_000L && currentPosition < 5_000L) {
                                 seekTo(req.startMs)
