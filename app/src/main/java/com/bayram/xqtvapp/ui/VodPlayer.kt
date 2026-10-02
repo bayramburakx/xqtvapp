@@ -1,18 +1,33 @@
 package com.bayram.xqtvapp.ui
 
+import android.app.Activity
+import android.content.Context
+import android.media.AudioManager
+import android.util.TypedValue
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -31,14 +48,16 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import coil.compose.AsyncImage
 import com.bayram.xqtvapp.PlayReq
 import com.bayram.xqtvapp.data.EpisodeEntry
 import com.bayram.xqtvapp.data.FavoritesStore
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val NetflixRed = Color(0xFFE50914)
-private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.5f)
+private val SUB_SIZES = listOf("Küçük", "Orta", "Büyük")
+private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 private val RESIZE_NAMES = listOf("Sığdır", "Doldur", "Zoom")
 private val RESIZE_MODES = listOf(
     AspectRatioFrameLayout.RESIZE_MODE_FIT,
@@ -46,11 +65,22 @@ private val RESIZE_MODES = listOf(
     AspectRatioFrameLayout.RESIZE_MODE_ZOOM
 )
 
-/** VOD oynatici: kaldigi yerden devam, konum kaydi, sonraki bolum, Netflix arayuzu. */
+/**
+ * Film/dizi oynatici: cift dokunus +-10sn, ses/parlaklik surukleme,
+ * kilit modu, uyku yok, devam-toast, bolum paneli, gercek kalite.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val view = LocalView.current
+    val scope = rememberCoroutineScope()
+    val errScope = rememberCoroutineScope()
+    val activity = ctx as? Activity
+    val audioMan = remember {
+        ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    }
+
     var currentUrl by remember(req) { mutableStateOf(req.url) }
     var currentIdx by remember(req) { mutableIntStateOf(req.episodeIndex) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -59,31 +89,46 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
     var ended by remember { mutableStateOf(false) }
     var retryKey by remember { mutableIntStateOf(0) }
     var resizeIdx by remember { mutableIntStateOf(0) }
-    var speedIdx by remember { mutableIntStateOf(0) }
+    var speedIdx by remember { mutableIntStateOf(2) }
+    var muted by remember { mutableStateOf(false) }
+    var locked by remember { mutableStateOf(false) }
+    var qualityH by remember { mutableIntStateOf(-1) }
+    var subSizeIdx by remember { mutableIntStateOf(1) }
     var showUi by remember { mutableStateOf(true) }
     var uiTick by remember { mutableIntStateOf(0) }
     var pos by remember { mutableLongStateOf(0L) }
     var dur by remember { mutableLongStateOf(0L) }
     var showTracks by remember { mutableStateOf(false) }
-    var showMore by remember { mutableStateOf(false) }
+    var showSpeed by remember { mutableStateOf(false) }
+    var showQuality by remember { mutableStateOf(false) }
+    var showAspect by remember { mutableStateOf(false) }
     var showEpisodes by remember { mutableStateOf(false) }
-    var showTimer by remember { mutableStateOf(false) }
-    var sleepMin by remember { mutableIntStateOf(0) }
     var trackTick by remember { mutableIntStateOf(0) }
     var countdown by remember { mutableIntStateOf(-1) }
-    val trackPrefs by FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off"))
-    var prefsApplied by remember(req) { mutableStateOf(false) }
+    var ripple by remember { mutableStateOf<String?>(null) }
+    var hud by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    var resumeToast by remember { mutableStateOf(req.startMs > 10_000L) }
+    var playerView by remember { mutableStateOf<PlayerView?>(null) }
     val autoplay by FavoritesStore.autoplayFlow(ctx).collectAsState(initial = true)
+    val saveScope = rememberCoroutineScope()
+    var resumeKey by remember(req) { mutableStateOf(req.resumeId) }
+    val trackPrefs by FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off"))
+    val subSizePref by FavoritesStore.subSizeFlow(ctx).collectAsState(initial = 1)
+    var prefsApplied by remember(req) { mutableStateOf(false) }
+    var tapJob by remember { mutableStateOf<Job?>(null) }
 
     DisposableEffect(Unit) {
         view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
     }
+    LaunchedEffect(subSizePref) {
+        subSizeIdx = subSizePref
+        playerView?.subtitleView?.setFixedTextSize(
+            TypedValue.COMPLEX_UNIT_SP, PlayerBackend.SUB_SIZES_SP[subSizePref.coerceIn(0, 2)]
+        )
+    }
 
     val hasSeries = req.episodes.isNotEmpty()
-    val saveScope = rememberCoroutineScope()
-    val errScope = rememberCoroutineScope()
-    var resumeKey by remember(req) { mutableStateOf(req.resumeId) }
     val nextEp: EpisodeEntry? = if (hasSeries) req.episodes.getOrNull(currentIdx + 1) else null
     val displayTitle = if (hasSeries && currentIdx >= 0) {
         val ep = req.episodes.getOrNull(currentIdx)
@@ -101,7 +146,7 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                             errorMsg = null
                             if (!prefsApplied) {
                                 prefsApplied = true
-                                PlayerBackend.applyTrackPrefs(this@apply, trackPrefs.first, trackPrefs.second)
+                                PlayerBackend.applyTrackPrefs(this, trackPrefs.first, trackPrefs.second)
                             }
                             if (req.startMs > 10_000L && currentPosition < 5_000L) {
                                 seekTo(req.startMs)
@@ -139,7 +184,6 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
         }
     }
 
-    // konum kaydet (5 sn'de bir + cikista)
     LaunchedEffect(exo, currentUrl) {
         while (true) {
             delay(5000)
@@ -151,18 +195,16 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
             }
         }
     }
-    // bolum degisiminde/cikista playeri birak (konum zaten 5 sn'de bir kaydediliyor)
     DisposableEffect(exo) {
-        onDispose {
-            try { exo?.release() } catch (_: Exception) { }
-        }
+        onDispose { try { exo?.release() } catch (_: Exception) { } }
     }
 
+    val saveScope2 = saveScope
     fun saveNow() {
         val p = exo?.currentPosition ?: 0L
         val d = exo?.duration ?: 0L
         if (resumeKey.isNotEmpty() && d > 0 && p > 5_000L && p < (d * 0.98).toLong()) {
-            saveScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            saveScope2.launch(kotlinx.coroutines.Dispatchers.IO) {
                 FavoritesStore.savePosition(ctx, resumeKey, p, d)
             }
         }
@@ -178,16 +220,27 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(showUi, uiTick, playing) {
-        if (showUi && playing && !ended) {
+        if (showUi && playing && !ended && !locked) {
             delay(4000)
             showUi = false
         }
     }
-    LaunchedEffect(sleepMin) {
-        if (sleepMin > 0) {
-            delay(sleepMin * 60_000L)
-            exo?.pause()
-            sleepMin = 0
+    LaunchedEffect(ripple) {
+        if (ripple != null) {
+            delay(550)
+            ripple = null
+        }
+    }
+    LaunchedEffect(hud) {
+        if (hud != null) {
+            delay(900)
+            hud = null
+        }
+    }
+    LaunchedEffect(resumeToast) {
+        if (resumeToast) {
+            delay(5000)
+            resumeToast = false
         }
     }
     LaunchedEffect(countdown) {
@@ -202,8 +255,21 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
         }
     }
 
-    val interaction = remember { MutableInteractionSource() }
-    fun poke() { showUi = true; uiTick++ }
+    fun poke() {
+        if (locked) {
+            showUi = true; uiTick++
+            return
+        }
+        showUi = true; uiTick++
+    }
+    fun togglePlay() {
+        if (playing) exo?.pause() else exo?.play()
+        poke()
+    }
+    fun seekBy(ms: Long) {
+        exo?.seekTo(((exo?.currentPosition ?: 0L) + ms).coerceAtLeast(0L))
+        poke()
+    }
     fun playEpisode(idx: Int) {
         val ep = req.episodes.getOrNull(idx) ?: return
         currentIdx = idx
@@ -211,11 +277,26 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
         resumeKey = "series_" + ep.id
         retryKey++
     }
+    fun setVolume(v: Int) {
+        audioMan?.let {
+            val max = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            it.setStreamVolume(AudioManager.STREAM_MUSIC, (v / 100f * max).toInt().coerceIn(0, max), 0)
+        }
+        muted = v == 0
+    }
+    fun getVolume(): Int {
+        audioMan?.let {
+            val max = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            if (max <= 0) return 70
+            return (it.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max)
+        }
+        return 70
+    }
 
-    Box(
-        Modifier.fillMaxSize().background(Color.Black)
-            .clickable(interactionSource = interaction, indication = null) { poke() }
-    ) {
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        // arka plan emaneti (video yuklenmeden once)
+        Box(Modifier.fillMaxSize().background(tileBrush(req.title.ifBlank { req.url })))
+
         if (exo != null) {
             AndroidView(
                 factory = { c ->
@@ -223,6 +304,7 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                         it.player = exo
                         it.useController = false
                         it.resizeMode = RESIZE_MODES[resizeIdx]
+                        playerView = it
                     }
                 },
                 update = { it.resizeMode = RESIZE_MODES[resizeIdx] },
@@ -230,102 +312,280 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
             )
         }
 
+        // dokunma alani: tek tik + cift tik + dikey surukleme
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+            val w = maxWidth
+            Box(
+                Modifier.fillMaxSize()
+                    .pointerInput(locked) {
+                        detectTapGestures(
+                            onDoubleTap = { off ->
+                                tapJob?.cancel()
+                                tapJob = null
+                                if (locked) {
+                                    showUi = true; uiTick++
+                                    return@detectTapGestures
+                                }
+                                when {
+                                    off.x < w.toPx() * 0.4f -> {
+                                        seekBy(-10_000); ripple = "L"
+                                    }
+                                    off.x > w.toPx() * 0.6f -> {
+                                        seekBy(10_000); ripple = "R"
+                                    }
+                                    else -> togglePlay()
+                                }
+                                poke()
+                            },
+                            onTap = {
+                                tapJob?.cancel()
+                                tapJob = scope.launch {
+                                    delay(300)
+                                    if (locked) {
+                                        showUi = true; uiTick++
+                                    } else if (playing) {
+                                        showUi = false
+                                    } else {
+                                        poke()
+                                    }
+                                }
+                            }
+                        )
+                    }
+                    .pointerInput(locked) {
+                        var accY = 0f
+                        var startX = 0f
+                        var startVol = 70
+                        var startBri = 0.7f
+                        var active = false
+                        detectVerticalDragGestures(
+                            onDragStart = { off ->
+                                startX = off.x
+                                startVol = getVolume()
+                                startBri = activity?.window?.attributes?.screenBrightness
+                                    ?.takeIf { it >= 0 } ?: 0.7f
+                                accY = 0f
+                                active = false
+                            },
+                            onDragEnd = { active = false },
+                            onVerticalDrag = { _, dragAmount ->
+                                if (locked) return@detectVerticalDragGestures
+                                accY += dragAmount
+                                if (!active && kotlin.math.abs(accY) < 14) return@detectVerticalDragGestures
+                                active = true
+                                // asagi surukleme degeri dusurur (dragAmount>0 asagi)
+                                val d = -accY / 400f * 100
+                                if (startX < w.toPx() / 2f) {
+                                    val b = (startBri + d / 100f).coerceIn(0.15f, 1f)
+                                    activity?.window?.let {
+                                        val lp = it.attributes
+                                        lp.screenBrightness = b
+                                        it.attributes = lp
+                                    }
+                                    hud = Pair("bri", (b * 100).toInt())
+                                } else {
+                                    val v = (startVol + d).toInt().coerceIn(0, 100)
+                                    setVolume(v)
+                                    hud = Pair("vol", v)
+                                }
+                            }
+                        )
+                    }
+            )
+        }
+
         if (buffering && errorMsg == null && !ended) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = NetflixRed, strokeWidth = 5.dp, modifier = Modifier.size(56.dp))
+                CircularProgressIndicator(color = Color.White, strokeWidth = 4.dp,
+                    modifier = Modifier.size(54.dp))
             }
         }
 
-        if (showUi && !ended) {
+        // +-10 dalga efekti
+        ripple?.let { side ->
+            Box(
+                Modifier.align(if (side == "L") Alignment.CenterStart else Alignment.CenterEnd)
+                    .padding(horizontal = 36.dp).size(120.dp)
+                    .clip(CircleShape).background(Color.White.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(if (side == "L") "−10 sn" else "+10 sn",
+                    color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        // orta HUD (ses/parlaklik)
+        hud?.let { (kind, v) ->
+            Box(Modifier.align(Alignment.Center)
+                .clip(RoundedCornerShape(22.dp))
+                .background(Color(0x9E20202C))
+                .padding(20.dp, 14.dp)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.width(180.dp)) {
+                    Icon(
+                        if (kind == "vol") Icons.Filled.VolumeUp else Icons.Filled.VolumeUp,
+                        null, tint = Color.White, modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { v / 100f },
+                        modifier = Modifier.fillMaxWidth().height(5.dp)
+                            .clip(RoundedCornerShape(9.dp)),
+                        color = Color.White,
+                        trackColor = Color.White.copy(alpha = 0.25f)
+                    )
+                }
+            }
+        }
+
+        // devam toast'i
+        AnimatedVisibility(
+            visible = resumeToast && errorMsg == null,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 80.dp)
+        ) {
+            Row(
+                Modifier.clip(RoundedCornerShape(99.dp))
+                    .background(Color(0xDE1E1E2C))
+                    .padding(18.dp, 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("${fmtMs(req.startMs)}’den devam ediliyor",
+                    color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.width(12.dp))
+                Button(
+                    onClick = {
+                        exo?.seekTo(0L)
+                        resumeToast = false
+                        poke()
+                    },
+                    shape = RoundedCornerShape(99.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp)
+                ) { Text("Baştan başla", color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+            }
+        }
+
+        if (showUi && !ended && !locked) {
+            // ust bar
             Row(
                 Modifier.fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color(0xDD000000), Color.Transparent)))
-                    .padding(6.dp, 10.dp),
+                    .background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent)))
+                    .padding(16.dp, 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { goBack() }) {
-                    Icon(Icons.Filled.ArrowBack, "Geri", tint = Color.White, modifier = Modifier.size(28.dp))
-                }
-                Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                GlassCircleButton2(Icons.Filled.ArrowBack) { goBack() }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
                     Text(displayTitle, color = Color.White, fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp)
-                    if (req.startMs > 10_000L) Text(
-                        "Kaldığın yerden devam • ${fmtMs(req.startMs)}",
-                        color = NetflixRed, fontSize = 11.sp, fontWeight = FontWeight.Bold
-                    )
-                    else if (hasSeries) Text(req.seriesTitle, color = Color.Gray, fontSize = 11.sp, maxLines = 1)
+                        fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (hasSeries) Text(req.seriesTitle, color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp, maxLines = 1)
                 }
-                if (hasSeries) {
-                    TextButton(onClick = { showEpisodes = true; poke() }) {
-                        Text("Bölümler", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
+                GlassCircleButton2(Icons.Filled.Lock) {
+                    locked = true
+                    showUi = false
                 }
-                TextButton(onClick = { showTracks = true; trackTick++; poke() }) {
-                    Text("Ses/Altyazı", color = Color.White, fontSize = 12.sp)
-                }
-                TextButton(onClick = { showMore = true; poke() }) {
-                    Text("•••", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.width(8.dp))
+                GlassCircleButton2(if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp) {
+                    muted = !muted
+                    exo?.volume = if (muted) 0f else 1f
+                    poke()
                 }
             }
-        }
 
-        if (showUi && !buffering && errorMsg == null && !ended && exo != null) {
+            // orta
             Row(
                 Modifier.align(Alignment.Center),
-                horizontalArrangement = Arrangement.spacedBy(44.dp),
+                horizontalArrangement = Arrangement.spacedBy(40.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { exo.seekBack(); poke() }, modifier = Modifier.size(52.dp)) {
-                    Icon(Icons.Filled.Replay10, "Geri 10", tint = Color.White, modifier = Modifier.size(44.dp))
-                }
+                SkipButton("-10", { seekBy(-10_000); ripple = "L" })
                 IconButton(
-                    onClick = { if (playing) exo.pause() else exo.play(); poke() },
-                    modifier = Modifier.size(78.dp).background(Color(0x66000000), CircleShape)
+                    onClick = { togglePlay() },
+                    modifier = Modifier.size(86.dp).background(Color.White, CircleShape)
                 ) {
-                    Icon(
-                        if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null,
-                        tint = Color.White, modifier = Modifier.size(52.dp)
-                    )
+                    Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null,
+                        tint = Color.Black, modifier = Modifier.size(34.dp))
                 }
-                IconButton(onClick = { exo.seekForward(); poke() }, modifier = Modifier.size(52.dp)) {
-                    Icon(Icons.Filled.Forward10, "İleri 10", tint = Color.White, modifier = Modifier.size(44.dp))
-                }
+                SkipButton("+10", { seekBy(10_000); ripple = "R" })
             }
-        }
 
-        if (showUi && !ended) {
+            // alt bar
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD000000))))
-                    .padding(16.dp, 10.dp, 16.dp, 14.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE0000000))))
+                    .padding(22.dp, 10.dp, 22.dp, 18.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(fmtMs(pos), color = Color.White, fontSize = 12.sp)
-                    Slider(
-                        value = if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f,
-                        onValueChange = { f -> exo?.seekTo((f * dur).toLong()) },
-                        modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
-                        colors = SliderDefaults.colors(
-                            thumbColor = NetflixRed, activeTrackColor = NetflixRed,
-                            inactiveTrackColor = Color(0xFF4D4D4D)
-                        )
+                Slider(
+                    value = if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f,
+                    onValueChange = { f -> exo?.seekTo((f * dur).toLong()) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White, activeTrackColor = Color.White,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.25f)
                     )
-                    Text(fmtMs(dur - pos) + " kaldı", color = Color.White, fontSize = 12.sp)
+                )
+                Row {
+                    Text(fmtMs(pos), color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.weight(1f))
+                    Text(fmtMs(dur), color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold)
                 }
+                Spacer(Modifier.height(10.dp))
+                PillRow(
+                    listOf("Ses ve altyazı", "Hız", "Bölümler", "Kalite", "Görüntü")
+                        .filter { it != "Bölümler" || hasSeries },
+                    onPick = {
+                        when (it) {
+                            "Ses ve altyazı" -> { showTracks = true; trackTick++ }
+                            "Hız" -> showSpeed = true
+                            "Bölümler" -> showEpisodes = true
+                            "Kalite" -> showQuality = true
+                            "Görüntü" -> showAspect = true
+                        }
+                        poke()
+                    },
+                    labelOf = {
+                        when (it) {
+                            "Hız" -> "${SPEEDS[speedIdx]}x"
+                            "Kalite" -> if (qualityH > 0) "${qualityH}p" else "Otomatik"
+                            "Görüntü" -> RESIZE_NAMES[resizeIdx]
+                            else -> it
+                        }
+                    }
+                )
             }
         }
 
+        // kilit acma hapi
+        if (locked) {
+            Button(
+                onClick = {
+                    locked = false
+                    poke()
+                },
+                shape = RoundedCornerShape(99.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0x9E20202C)),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 60.dp).height(48.dp)
+            ) { Text("Kilidi aç", color = Color.White, fontWeight = FontWeight.SemiBold) }
+        }
+
+        // sonraki bolum
         if (ended && errorMsg == null) {
-            if (nextEp != null) {
-                Box(Modifier.fillMaxSize().background(Color(0xEE000000)), contentAlignment = Alignment.Center) {
+            val nx = nextEp
+            if (nx != null) {
+                Box(Modifier.fillMaxSize().background(Color(0xEE000000)),
+                    contentAlignment = Alignment.Center) {
                     Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Sıradaki bölüm", color = Color.Gray, fontSize = 13.sp)
                         Spacer(Modifier.height(6.dp))
-                        Text("S${nextEp.season} • B${nextEp.episode} — ${nextEp.title}",
+                        Text("S${nx.season} • B${nx.episode} — ${nx.title}",
                             color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         Spacer(Modifier.height(8.dp))
-                        if (countdown > 0) Text("$countdown sn içinde başlıyor...", color = Color.Gray, fontSize = 13.sp)
-                        else Text("Otomatik oynatma kapalı", color = Color.Gray, fontSize = 13.sp)
+                        if (countdown > 0) Text("$countdown sn içinde başlıyor...",
+                            color = Color.Gray, fontSize = 13.sp)
                         Spacer(Modifier.height(16.dp))
                         Button(
                             onClick = { playEpisode(currentIdx + 1) },
@@ -344,15 +604,16 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                     }
                 }
             } else {
-                Box(Modifier.fillMaxSize().background(Color(0xEE000000)), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize().background(Color(0xEE000000)),
+                    contentAlignment = Alignment.Center) {
                     Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("İzlediğin için teşekkürler", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("Bitti", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         Spacer(Modifier.height(16.dp))
                         Button(
                             onClick = { retryKey++ },
-                            colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                             shape = RoundedCornerShape(10.dp)
-                        ) { Text("Baştan izle", color = Color.White) }
+                        ) { Text("Baştan izle", color = Color.Black) }
                         TextButton(onClick = { goBack() }) { Text("Geri dön", color = Color.Gray) }
                     }
                 }
@@ -368,9 +629,9 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                     Spacer(Modifier.height(16.dp))
                     Button(
                         onClick = { retryKey++ },
-                        colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                         shape = RoundedCornerShape(10.dp)
-                    ) { Text("Tekrar dene", color = Color.White) }
+                    ) { Text("Tekrar dene", color = Color.Black) }
                     TextButton(onClick = { goBack() }) { Text("Geri dön", color = Color.Gray) }
                 }
             }
@@ -378,75 +639,103 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
     }
 
     if (showEpisodes && hasSeries) {
-        AlertDialog(
-            onDismissRequest = { showEpisodes = false },
-            title = { Text(req.seriesTitle, fontSize = 16.sp) },
-            text = {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
-                    items(req.episodes.size) { i ->
-                        val ep = req.episodes[i]
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                .clickable { playEpisode(i); showEpisodes = false }
-                                .background(if (i == currentIdx) Color(0x22E50914) else Color.Transparent)
-                                .padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("S${ep.season} B${ep.episode}", color = NetflixRed, fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold, modifier = Modifier.width(64.dp))
-                            Text(ep.title, fontSize = 13.sp, modifier = Modifier.weight(1f),
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (i == currentIdx) {
-                                Icon(Icons.Filled.PlayArrow, null, tint = NetflixRed, modifier = Modifier.size(20.dp))
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showEpisodes = false }) { Text("Kapat") } }
+        EpisodeSidePanel(
+            title = req.seriesTitle,
+            episodes = req.episodes,
+            current = currentIdx,
+            onPick = { playEpisode(it); showEpisodes = false },
+            onClose = { showEpisodes = false }
         )
     }
 
     if (showTracks && exo != null) {
-        TrackDialog(exo = exo, tick = trackTick, onClose = { showTracks = false })
-    }
-
-    if (showMore && exo != null) {
-        AlertDialog(
-            onDismissRequest = { showMore = false },
-            title = { Text("Oynatıcı ayarları", fontSize = 16.sp) },
-            text = {
-                Column {
-                    var ap by remember { mutableStateOf(autoplay) }
-                    MoreRow("Görüntü", RESIZE_NAMES[resizeIdx]) {
-                        resizeIdx = (resizeIdx + 1) % 3
-                    }
-                    MoreRow("Hız", "${SPEEDS[speedIdx]}x") {
-                        speedIdx = (speedIdx + 1) % SPEEDS.size
-                        exo.setPlaybackSpeed(SPEEDS[speedIdx])
-                    }
-                    MoreRow("Otomatik oynat", if (ap) "Açık" else "Kapalı") {
-                        ap = !ap
-                    }
-                    MoreRow("Uyku", if (sleepMin > 0) "$sleepMin dk" else "Kapalı") {
-                        showMore = false
-                        showTimer = true
-                    }
-                    // autoplay degisikligini uygula
-                    LaunchedEffect(ap) {
-                        FavoritesStore.setAutoplay(ctx, ap)
-                    }
+        TrackDialog(
+            exo = exo, tick = trackTick, onClose = { showTracks = false },
+            subSize = subSizeIdx,
+            onSubSize = { i ->
+                subSizeIdx = i
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    FavoritesStore.setSubSize(ctx, i)
                 }
-            },
-            confirmButton = { TextButton(onClick = { showMore = false }) { Text("Kapat") } }
+                playerView?.subtitleView?.setFixedTextSize(
+                    TypedValue.COMPLEX_UNIT_SP, PlayerBackend.SUB_SIZES_SP[i.coerceIn(0, 2)]
+                )
+            }
         )
     }
 
-    if (showTimer) {
-        SleepDialog(
-            sleepMin = sleepMin,
-            onPick = { sleepMin = it; showTimer = false },
-            onClose = { showTimer = false }
-        )
+    if (showSpeed && exo != null) {
+        SheetShell(title = "Oynatma hızı", onClose = { showSpeed = false }) {
+            SPEEDS.forEachIndexed { i, s ->
+                SheetOption("${s}x" + if (s == 1f) " (normal)" else "", speedIdx == i) {
+                    speedIdx = i
+                    exo.setPlaybackSpeed(s)
+                    showSpeed = false
+                }
+            }
+        }
+    }
+
+    if (showQuality && exo != null) {
+        val heights = remember(exo, trackTick, retryKey) { PlayerBackend.videoHeights(exo) }
+        SheetShell(title = "Kalite", onClose = { showQuality = false }) {
+            SheetOption("Otomatik (önerilen)", qualityH == -1) {
+                qualityH = -1
+                PlayerBackend.setQuality(exo, null)
+                showQuality = false
+            }
+            heights.forEach { h ->
+                SheetOption("${h}p", qualityH == h) {
+                    qualityH = h
+                    PlayerBackend.setQuality(exo, h)
+                    showQuality = false
+                }
+            }
+        }
+    }
+
+    if (showAspect) {
+        SheetShell(title = "Görüntü oranı", onClose = { showAspect = false }) {
+            RESIZE_NAMES.forEachIndexed { i, n ->
+                SheetOption(n, resizeIdx == i) {
+                    resizeIdx = i
+                    showAspect = false
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkipButton(label: String, onClick: () -> Unit) {
+    Box(contentAlignment = Alignment.Center,
+        modifier = Modifier.size(60.dp).clickableNoRipple(onClick)) {
+        Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+    }
+}
+
+@Composable
+private fun GlassCircleButton2(icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(44.dp).clip(CircleShape)
+            .background(Color(0x9E222230))
+    ) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp)) }
+}
+
+@Composable
+private fun PillRow(items: List<String>, onPick: (String) -> Unit, labelOf: (String) -> String) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items.forEach {
+            OutlinedButton(
+                onClick = { onPick(it) },
+                shape = RoundedCornerShape(99.dp),
+                modifier = Modifier.height(40.dp)
+            ) { Text(labelOf(it), fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+        }
     }
 }
