@@ -183,7 +183,9 @@ class XtreamClient(
             }
         }
         list.sortWith(compareBy({ it.season }, { it.episode }))
-        return SeriesEntry(seriesId, name, cover, "", list)
+        val seriesPlot = info.optString("plot", "")
+        val seriesCast = info.optString("cast", "")
+        return SeriesEntry(seriesId, name, cover, "", list, plot = seriesPlot, cast = seriesCast)
     }
 
     /** Film detayi: puan, konu, oyuncu kadrosu (Xtream get_vod_info). */
