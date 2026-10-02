@@ -1000,6 +1000,7 @@ fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?, Map
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
+@Composable
 fun MovieTab(session: Session, onSearch: () -> Unit, onOpenMovie: (StalkerChannel) -> Unit) {
     var cat by remember { mutableStateOf("Tümü") }
     val cats = remember(session) { listOf("Tümü") + session.movies.map { it.genre }.distinct().sorted() }
@@ -1085,6 +1086,7 @@ fun MovieTab(session: Session, onSearch: () -> Unit, onOpenMovie: (StalkerChanne
 }
 
 @OptIn(ExperimentalFoundationApi::class)
+@Composable
 fun SeriesTab(session: Session, onSearch: () -> Unit, onOpenSeries: (SeriesEntry) -> Unit) {
     var cat by remember { mutableStateOf("Tümü") }
     val cats = remember(session) { listOf("Tümü") + session.series.map { it.category }.distinct().sorted() }
