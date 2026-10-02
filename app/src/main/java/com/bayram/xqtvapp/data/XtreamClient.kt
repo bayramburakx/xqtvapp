@@ -168,12 +168,16 @@ class XtreamClient(
                 val ext = o.optString("container_extension", "mp4")
                 val epNum = o.optString("episode_num", "${i + 1}").toIntOrNull() ?: (i + 1)
                 val title = o.optString("title", "Bölüm $epNum").ifBlank { "Bölüm $epNum" }
+                val info = o.optJSONObject("info")
+                val plot = info?.optString("plot", "").orEmpty()
+                val durSecs = info?.optString("duration", "")
+                    ?.let { parseDurationSecs(it) } ?: 0L
                 list.add(
                     EpisodeEntry(
                         id = id, season = seasonNum, episode = epNum,
                         title = title,
                         url = "$server/series/$username/$password/$id.$ext",
-                        cover = cover
+                        cover = cover, plot = plot, durationSecs = durSecs
                     )
                 )
             }
@@ -200,4 +204,45 @@ class XtreamClient(
             cover = info.optString("movie_image", md.optString("movie_image", ""))
         )
     }
+
+    /** Kisa EPG: su anki yayin (baslik, baslangic, bitis epoch sn). Yoksa null. */
+    suspend fun nowPlaying(streamId: String): EpgNow? {
+        val arr = getArray(
+            "player_api.php?${u()}&action=get_simple_data_table&stream_id=$streamId"
+        )
+        if (arr.length() == 0) return null
+        val now = System.currentTimeMillis() / 1000
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val start = o.optString("start", "0").toLongOrNull() ?: 0L
+            val end = o.optString("end", "0").toLongOrNull() ?: 0L
+            if (start <= now && now < end) {
+                return EpgNow(
+                    title = o.optString("title", ""),
+                    startEpoch = start, endEpoch = end,
+                    desc = o.optString("description", "")
+                )
+            }
+        }
+        return null
+    }
+}
+
+data class EpgNow(
+    val title: String,
+    val startEpoch: Long,
+    val endEpoch: Long,
+    val desc: String = ""
+)
+
+/** "2700" / "45:00" / "00:45:00" -> saniye. */
+fun parseDurationSecs(raw: String): Long {
+    val s = raw.trim()
+    if (s.isEmpty()) return 0L
+    s.toLongOrNull()?.let { return it }
+    val parts = s.split(":").mapNotNull { it.toLongOrNull() }
+    if (parts.isEmpty()) return 0L
+    var total = 0L
+    for (p in parts) total = total * 60 + p
+    return total
 }
