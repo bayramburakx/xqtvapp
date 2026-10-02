@@ -49,13 +49,37 @@ object EpgXml {
     private val mem = LinkedHashMap<String, Dump>()
     private val type = object : TypeToken<Dump>() {}.type
 
-    /** Yerlesik listeler: 9 -> 3 (TR/US/UK). Her acilista 9 ayri XML indirip
-     *  parse etmek CPU/bataryayi kavuruyordu; en cok kapsayan 3 liste yeterli. */
+    /** Yerlesik listeler: sadece TR/US/UK/CA. Disaridan bizim cektiklerimiz
+     *  bu 4 bolgeyle sinirli; kaynak EPG'si ne veriyorsa o zaten kullanilir. */
     private val BUILTIN = listOf(
         "https://iptv-epg.org/files/epg-tr.xml",
         "https://iptv-epg.org/files/epg-us.xml",
-        "https://iptv-epg.org/files/epg-uk.xml"
+        "https://iptv-epg.org/files/epg-uk.xml",
+        "https://iptv-epg.org/files/epg-ca.xml"
     )
+
+    /** Diger ulkelere ait oldugu acik kanallarda yerlesik listeler taranmaz
+     *  (or. DE/FR/IT/ES). US/UK/CA/TR isaretli ya da ulkesiz adlar
+     *  (or. ESPN, BBC One, TRT 1) serbesttir. */
+    private val BLOCKED_REGION = setOf(
+        "de", "germany", "deutschland", "fr", "france", "it", "italy", "italia",
+        "es", "spain", "espana", "pt", "portugal", "nl", "netherlands", "holland",
+        "be", "belgium", "ar", "arab", "ksa", "uae", "gr", "greece", "pl", "poland",
+        "ru", "russia", "ua", "ukraine", "in", "india", "pk", "pakistan", "bd",
+        "br", "brazil", "mx", "mexico", "latino", "ro", "romania", "se", "sweden",
+        "no", "norway", "dk", "denmark", "fi", "finland", "ch", "swiss", "at", "austria",
+        "au", "australia", "nz", "za", "africa", "asia", "japan", "jpn", "china", "chn",
+        "korea", "kor"
+    )
+
+    private fun isBuiltinAllowed(chName: String): Boolean {
+        val toks = chName.lowercase()
+            .replace("ı", "i").replace("ğ", "g").replace("ü", "u")
+            .replace("ş", "s").replace("ö", "o").replace("ç", "c")
+            .split(Regex("[^a-z]+")).filter { it.isNotEmpty() }
+        if (toks.isEmpty()) return true
+        return toks.none { it in BLOCKED_REGION }
+    }
 
     // Bulunamayan kanallar icin negatif cache: ayni kanala 6 saat tekrar internet taranmaz
     private const val MISS_TTL_MS = 6L * 60 * 60 * 1000
@@ -401,12 +425,14 @@ object EpgXml {
                 }?.let { return it }
             }
         } catch (_: Exception) { }
-        // 4) yerlesik global listeler (TR + US/UK)
-        try {
-            matchBuiltin(ctx, ch.name).firstOrNull {
-                it.startEpoch <= now && now < it.endEpoch
-            }?.let { return it }
-        } catch (_: Exception) { }
+        // 4) yerlesik listeler: SADECE TR/US/UK/CA (diger ulkeler atlanir)
+        if (isBuiltinAllowed(ch.name)) {
+            try {
+                matchBuiltin(ctx, ch.name).firstOrNull {
+                    it.startEpoch <= now && now < it.endEpoch
+                }?.let { return it }
+            } catch (_: Exception) { }
+        }
         markMiss("now:" + ch.name)
         return null
     }
@@ -443,10 +469,12 @@ object EpgXml {
                 if (l.isNotEmpty()) return l
             }
         } catch (_: Exception) { }
-        try {
-            val l = matchBuiltin(ctx, ch.name).filter { it.endEpoch > now - 3600 }
-            if (l.isNotEmpty()) return l
-        } catch (_: Exception) { }
+        if (isBuiltinAllowed(ch.name)) {
+            try {
+                val l = matchBuiltin(ctx, ch.name).filter { it.endEpoch > now - 3600 }
+                if (l.isNotEmpty()) return l
+            } catch (_: Exception) { }
+        }
         markMiss("day:" + ch.name)
         return emptyList()
     }

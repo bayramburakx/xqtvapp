@@ -306,9 +306,10 @@ class XtreamClient(
             val end = (o.optString("end", "").ifBlank { o.optString("stop_timestamp",
                 o.optString("end_timestamp", o.optString("stop", "0"))) })
                 .toLongOrNull() ?: 0L
-            val title = o.optString("title", o.optString("name", ""))
+            val title = decodeB64(o.optString("title", o.optString("name", "")))
             if (start > 0 && end > start && title.isNotEmpty()) {
-                out.add(EpgNow(title, start, end, o.optString("description", o.optString("desc", ""))))
+                out.add(EpgNow(title, start, end,
+                    decodeB64(o.optString("description", o.optString("desc", "")))))
             }
         }
         return out.sortedBy { it.startEpoch }
@@ -337,16 +338,37 @@ class XtreamClient(
                         val dur = o.optString("duration", "").toLongOrNull() ?: 0L
                         if (dur > 0) start + dur else 0L
                     } else end
-                    val title = o.optString("title", o.optString("name", ""))
+                    val title = decodeB64(o.optString("title", o.optString("name", "")))
                         .ifBlank { "Program" }
                     if (start > 0 && stop2 > start) {
                         out.add(EpgNow(title, start, stop2,
-                            o.optString("description", o.optString("desc", ""))))
+                            decodeB64(o.optString("description", o.optString("desc", "")))))
                     }
                 }
                 out.sortedBy { it.startEpoch }
             }
         } catch (_: Exception) { emptyList() }
+    }
+
+    /** Bazi Xtream panelleri EPG baslik/aciklamayi base64 gonderir
+     *  (or. "VGHFn2FjYWsgQnUgRGVuaXo=" -> "Tasacak Bu Deniz").
+     *  Base64'e benzemiyorsa ham metin aynen doner. */
+    private fun decodeB64(raw: String): String {
+        val s = raw.trim()
+        if (s.length < 8 || s.length % 4 != 0) return raw
+        if (!s.matches(Regex("[A-Za-z0-9+/=]+"))) return raw
+        // Duz metinler de base64 alfabesindedir; yanlis cozumu onlemek icin
+        // padding (=) veya uzunluk sarti aranir
+        if (!s.contains("=") && s.length < 12) return raw
+        return try {
+            val bytes = android.util.Base64.decode(s, android.util.Base64.DEFAULT)
+            if (bytes.isEmpty() || bytes.size > 512) return raw
+            val txt = String(bytes, Charsets.UTF_8).trim()
+            if (txt.isEmpty()) return raw
+            val printable = txt.count { it.code in 32..126 || it.code in 160..591 }
+            if (printable * 10 < txt.length * 7) return raw
+            txt
+        } catch (_: Exception) { raw }
     }
 
     private fun parseEpgTs(raw: String): Long {

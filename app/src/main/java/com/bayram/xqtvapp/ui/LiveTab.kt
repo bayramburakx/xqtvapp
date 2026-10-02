@@ -371,8 +371,10 @@ private fun EpgGuide(
 
     val now = System.currentTimeMillis() / 1000
     val winStart = (now - 1800) / 3600 * 3600
-    val winEnd = winStart + 6 * 3600
-    val pxPerSec = 0.55f
+    // 6s pencere + 0.55 olcek saat basina ~1980dp demekti (23:00-00:00 arasi dev bosluk).
+    // Referans HTML gibi sik izgara: 4s pencere, saat basina ~500dp.
+    val winEnd = winStart + 4 * 3600
+    val pxPerSec = 0.14f
     val hScroll = rememberScrollState()
     val rows = remember(list) { list.take(8) }
 
