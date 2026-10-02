@@ -20,7 +20,7 @@ import java.util.zip.GZIPInputStream
  */
 object EpgXml {
     private const val TTL_MS = 24L * 60 * 60 * 1000
-    private const val MAX_BYTES = 15 * 1024 * 1024
+    private const val MAX_BYTES = 25 * 1024 * 1024
     private val gson = Gson()
 
     private val client: OkHttpClient by lazy {
@@ -38,6 +38,11 @@ object EpgXml {
 
     private val mem = LinkedHashMap<String, Dump>()
     private val type = object : TypeToken<Dump>() {}.type
+
+    /** Yerlesik varsayilan listeler (dogrulanmis calisiyor). */
+    private val BUILTIN = listOf(
+        "https://iptv-epg.org/files/epg-tr.xml"
+    )
 
     fun normalize(name: String): String =
         name.lowercase()
@@ -190,6 +195,13 @@ object EpgXml {
     }
 
     private suspend fun ensureLoaded(ctx: Context, m3uUrl: String): Dump = withContext(Dispatchers.IO) {
+        val defUrl = try {
+            kotlinx.coroutines.flow.first(com.bayram.xqtvapp.data.FavoritesStore.defaultEpgFlow(ctx))
+        } catch (_: Exception) { "" }
+        // kaynak M3U degilse (Xtream/Stalker) varsayilan listeyi dogrudan indir
+        if (m3uUrl.isBlank() && defUrl.isNotBlank()) {
+            return@withContext loadDirect(ctx, "def:" + defUrl, defUrl)
+        }
         synchronized(mem) {
             mem[m3uUrl]?.let { if (System.currentTimeMillis() - it.savedAt < TTL_MS) return@withContext it }
         }
@@ -227,6 +239,48 @@ object EpgXml {
         dump
     }
 
+    private suspend fun loadDirect(ctx: Context, key: String, xmlUrl: String): Dump {
+        synchronized(mem) {
+            mem[key]?.let { if (System.currentTimeMillis() - it.savedAt < TTL_MS) return it }
+        }
+        val f = File(ctx.filesDir, "portio_epg_" + (xmlUrl.hashCode().toUInt().toString(16)) + ".json")
+        try {
+            if (f.exists()) {
+                val d = gson.fromJson<Dump>(f.readText(), type)
+                if (System.currentTimeMillis() - d.savedAt < TTL_MS) {
+                    synchronized(mem) { mem[key] = d }
+                    return d
+                }
+            }
+        } catch (_: Exception) { }
+        var dump = Dump(System.currentTimeMillis(), emptyMap())
+        val data = downloadCapped(xmlUrl)
+        if (data != null) {
+            val byId = parseXml(data)
+            val byName = mutableMapOf<String, MutableList<EpgEntry>>()
+            byId.forEach { (id, list) ->
+                byName.getOrPut(normalize(id)) { mutableListOf() }.addAll(list)
+                byName.getOrPut(id) { mutableListOf() }.addAll(list)
+            }
+            byName.values.forEach { it.sortBy { e -> e.startEpoch } }
+            dump = Dump(System.currentTimeMillis(), byName)
+            try { f.writeText(gson.toJson(dump)) } catch (_: Exception) { }
+        }
+        synchronized(mem) { mem[key] = dump }
+        return dump
+    }
+
+    private suspend fun matchBuiltin(ctx: Context, name: String): List<EpgEntry> {
+        for (u in BUILTIN) {
+            try {
+                val dump = loadDirect(ctx, "builtin:" + u, u)
+                val l = dump.byName[normalize(name)] ?: continue
+                if (l.isNotEmpty()) return l
+            } catch (_: Exception) { }
+        }
+        return emptyList()
+    }
+
     /** Tek kanal icin su anki yayin (once Xtream denenir, sonra XMLTV). */
     suspend fun lookupNow(
         ctx: Context, session: com.bayram.xqtvapp.Session, ch: StalkerChannel
@@ -241,16 +295,21 @@ object EpgXml {
                 }
             } catch (_: Exception) { }
         }
-        // 2) XMLTV yedegi
-        if (session.m3uUrl.isNotBlank()) {
-            try {
-                val dump = ensureLoaded(ctx, session.m3uUrl)
+        // 2) XMLTV yedegi (M3U url-tvg veya varsayilan liste)
+        try {
+            val dump = ensureLoaded(ctx, session.m3uUrl)
                 val now = System.currentTimeMillis() / 1000
-                dump.byName[normalize(ch.name)]?.firstOrNull {
-                    it.startEpoch <= now && now < it.endEpoch
-                }?.let { return it }
-            } catch (_: Exception) { }
-        }
+            dump.byName[normalize(ch.name)]?.firstOrNull {
+                it.startEpoch <= now && now < it.endEpoch
+            }?.let { return it }
+        } catch (_: Exception) { }
+        // son care: yerlesik dunya listeleri
+        try {
+            val now = System.currentTimeMillis() / 1000
+            matchBuiltin(ctx, ch.name).firstOrNull {
+                it.startEpoch <= now && now < it.endEpoch
+            }?.let { return it }
+        } catch (_: Exception) { }
         return null
     }
 
@@ -268,15 +327,18 @@ object EpgXml {
                 }
             } catch (_: Exception) { }
         }
-        if (session.m3uUrl.isNotBlank()) {
-            try {
-                val dump = ensureLoaded(ctx, session.m3uUrl)
-                val now = System.currentTimeMillis() / 1000
-                val l = (dump.byName[normalize(ch.name)] ?: emptyList())
-                    .filter { it.endEpoch > now - 3600 }
-                if (l.isNotEmpty()) return l
-            } catch (_: Exception) { }
-        }
+        try {
+            val dump = ensureLoaded(ctx, session.m3uUrl)
+            val now = System.currentTimeMillis() / 1000
+            val l = (dump.byName[normalize(ch.name)] ?: emptyList())
+                .filter { it.endEpoch > now - 3600 }
+            if (l.isNotEmpty()) return l
+        } catch (_: Exception) { }
+        try {
+            val now = System.currentTimeMillis() / 1000
+            val l = matchBuiltin(ctx, ch.name).filter { it.endEpoch > now - 3600 }
+            if (l.isNotEmpty()) return l
+        } catch (_: Exception) { }
         return emptyList()
     }
 }
