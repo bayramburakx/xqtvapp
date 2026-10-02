@@ -51,8 +51,8 @@ private val RESIZE_MODES = listOf(
 fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val view = LocalView.current
-    var currentUrl by remember { mutableStateOf(req.url) }
-    var currentIdx by remember { mutableIntStateOf(req.episodeIndex) }
+    var currentUrl by remember(req) { mutableStateOf(req.url) }
+    var currentIdx by remember(req) { mutableIntStateOf(req.episodeIndex) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var buffering by remember { mutableStateOf(true) }
     var playing by remember { mutableStateOf(true) }
@@ -71,6 +71,8 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
     var sleepMin by remember { mutableIntStateOf(0) }
     var trackTick by remember { mutableIntStateOf(0) }
     var countdown by remember { mutableIntStateOf(-1) }
+    val trackPrefs by FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off"))
+    var prefsApplied by remember(req) { mutableStateOf(false) }
     val autoplay by FavoritesStore.autoplayFlow(ctx).collectAsState(initial = true)
 
     DisposableEffect(Unit) {
@@ -81,7 +83,7 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
     val hasSeries = req.episodes.isNotEmpty()
     val saveScope = rememberCoroutineScope()
     val errScope = rememberCoroutineScope()
-    var resumeKey by remember { mutableStateOf(req.resumeId) }
+    var resumeKey by remember(req) { mutableStateOf(req.resumeId) }
     val nextEp: EpisodeEntry? = if (hasSeries) req.episodes.getOrNull(currentIdx + 1) else null
     val displayTitle = if (hasSeries && currentIdx >= 0) {
         val ep = req.episodes.getOrNull(currentIdx)
@@ -97,6 +99,10 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                         buffering = state == Player.STATE_BUFFERING
                         if (state == Player.STATE_READY) {
                             errorMsg = null
+                            if (!prefsApplied) {
+                                prefsApplied = true
+                                PlayerBackend.applyTrackPrefs(this, trackPrefs.first, trackPrefs.second)
+                            }
                             if (req.startMs > 10_000L && currentPosition < 5_000L) {
                                 seekTo(req.startMs)
                             }
@@ -105,6 +111,9 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                             playing = false; ended = true
                             saveScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                 FavoritesStore.clearPosition(ctx, resumeKey)
+                                if (resumeKey.startsWith("series_")) {
+                                    FavoritesStore.markWatched(ctx, resumeKey)
+                                }
                             }
                             if (nextEp != null && autoplay) countdown = 10
                         }
