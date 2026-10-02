@@ -105,6 +105,7 @@ fun MovieDetailScreen(
     Box(Modifier.fillMaxSize().background(PBg)) {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             item {
+                Box(Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth().height(520.dp)) {
                     if (cover.isNotBlank()) AsyncImage(model = cover, contentDescription = null,
                         modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -124,9 +125,7 @@ fun MovieDetailScreen(
                         }
                     }
                 }
-            }
-            item {
-                Column(Modifier.padding(horizontal = 20.dp).offset(y = (-150).dp)) {
+                Column(Modifier.fillMaxWidth().padding(top = 370.dp).padding(horizontal = 20.dp)) {
                     GlassTag(if (resume?.hasValid() == true) "Kaldığın yerden" else "Yeni eklendi")
                     Spacer(Modifier.height(12.dp))
                     Text(movie.name, fontSize = 52.sp, lineHeight = 50.sp,
@@ -250,7 +249,8 @@ fun MovieDetailScreen(
                             }
                         }
                     }
-                    Spacer(Modifier.height(50.dp))
+                    Spacer(Modifier.height(24.dp))
+                }
                 }
             }
         }
@@ -341,6 +341,7 @@ fun SeriesDetailScreen(
     Box(Modifier.fillMaxSize().background(PBg)) {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             item {
+                Box(Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth().height(520.dp)) {
                     if (entry.cover.isNotBlank()) AsyncImage(model = entry.cover,
                         contentDescription = null, modifier = Modifier.fillMaxSize(),
@@ -361,9 +362,7 @@ fun SeriesDetailScreen(
                         }
                     }
                 }
-            }
-            item {
-                Column(Modifier.padding(horizontal = 20.dp).offset(y = (-150).dp)) {
+                Column(Modifier.fillMaxWidth().padding(top = 370.dp).padding(horizontal = 20.dp)) {
                     GlassTag(if (watchedCount > 0) "İzlemeye devam et" else "Yeni sezon")
                     Spacer(Modifier.height(12.dp))
                     Text(entry.name, fontSize = 52.sp, lineHeight = 50.sp,
@@ -446,19 +445,18 @@ fun SeriesDetailScreen(
                         Text("$watchedCount/${allEps.size} izlendi", color = PTx2, fontSize = 14.sp)
                     }
                     if (seasons.size > 1) {
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(8.dp))
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(seasons) { s ->
                                 FilterChip(
                                     selected = season == s,
                                     onClick = { season = s },
-                                    label = { Text("Sezon $s") },
+                                    label = { Text("S$s") },
                                     shape = RoundedCornerShape(99.dp)
                                 )
                             }
                         }
                     }
-                    Spacer(Modifier.height(4.dp))
                 }
             }
             items(eps, key = { it.id }) { ep ->
@@ -580,7 +578,9 @@ fun SeriesDetailScreen(
                     }
                 }
             }
-            item { Spacer(Modifier.height(50.dp)) }
+            item { Spacer(Modifier.height(24.dp)) }
+                }
+            }
         }
 
         if (showMini) {
