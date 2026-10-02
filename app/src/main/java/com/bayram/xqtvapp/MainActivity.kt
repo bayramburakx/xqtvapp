@@ -8,10 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -19,16 +17,16 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExitToApp
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -44,26 +42,45 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import coil.compose.AsyncImage
+import com.bayram.xqtvapp.data.ContentCache
+import com.bayram.xqtvapp.data.EpgCache
+import com.bayram.xqtvapp.data.EpgEntry
 import com.bayram.xqtvapp.data.EpisodeEntry
 import com.bayram.xqtvapp.data.FavoritesStore
-import com.bayram.xqtvapp.data.M3uParser
-import com.bayram.xqtvapp.data.clearSavedSources
-import com.bayram.xqtvapp.data.loadM3uSession
-import com.bayram.xqtvapp.data.loadStalkerSession
-import com.bayram.xqtvapp.data.loadXtreamSession
-import com.bayram.xqtvapp.data.markLastSource
-import com.bayram.xqtvapp.data.tryAutoLogin
 import com.bayram.xqtvapp.data.SeriesEntry
+import com.bayram.xqtvapp.data.SourceEntry
+import com.bayram.xqtvapp.data.SourceStore
 import com.bayram.xqtvapp.data.StalkerChannel
 import com.bayram.xqtvapp.data.StalkerClient
-import com.bayram.xqtvapp.data.VodDetail
 import com.bayram.xqtvapp.data.XtreamClient
+import com.bayram.xqtvapp.ui.AddSourceScreen
+import com.bayram.xqtvapp.ui.LoadingRingScreen
+import com.bayram.xqtvapp.ui.MovieDetailScreen
+import com.bayram.xqtvapp.ui.PBg
+import com.bayram.xqtvapp.ui.PGlass
+import com.bayram.xqtvapp.ui.PLine
+import com.bayram.xqtvapp.ui.PLive
+import com.bayram.xqtvapp.ui.POk
+import com.bayram.xqtvapp.ui.PTx
+import com.bayram.xqtvapp.ui.PTx2
 import com.bayram.xqtvapp.ui.PlayerScreen
-import com.bayram.xqtvapp.ui.fmtMs
+import com.bayram.xqtvapp.ui.ProgressLine
+import com.bayram.xqtvapp.ui.SectionHead
+import com.bayram.xqtvapp.ui.SeriesDetailScreen
+import com.bayram.xqtvapp.ui.SourcesScreen
+import com.bayram.xqtvapp.ui.SplashScreen
+import com.bayram.xqtvapp.ui.clickableNoRipple
+import com.bayram.xqtvapp.ui.initialsOf
+import com.bayram.xqtvapp.ui.randomMac
+import com.bayram.xqtvapp.ui.remainingText
+import com.bayram.xqtvapp.ui.tileBrush
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -77,21 +94,17 @@ val KEY_X_USER = stringPreferencesKey("xtream_user")
 val KEY_X_PASS = stringPreferencesKey("xtream_pass")
 val KEY_M_URL = stringPreferencesKey("m3u_url")
 
-private val Bg = Color(0xFF07090F)
-private val Card2 = Color(0xFF141927)
-private val AccentRed = Color(0xFFE50914)
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
-                    background = Bg, surface = Bg, surfaceVariant = Card2,
+                    background = PBg, surface = PBg, surfaceVariant = Color(0xFF15151F),
                     primary = Color.White, onBackground = Color.White, onSurface = Color.White
                 )
             ) {
-                Surface(modifier = Modifier.fillMaxSize(), color = Bg) { AppNav() }
+                Surface(modifier = Modifier.fillMaxSize(), color = PBg) { AppNav() }
             }
         }
     }
@@ -106,7 +119,9 @@ data class Session(
     val stalkerMac: String = "",
     val xServer: String = "",
     val xUser: String = "",
-    val xPass: String = ""
+    val xPass: String = "",
+    val sourceId: String = "",
+    val sourceName: String = ""
 )
 
 data class PlayReq(
@@ -122,43 +137,42 @@ data class PlayReq(
     val headers: Map<String, String> = emptyMap()
 )
 
+private sealed interface Root {
+    data object Splash : Root
+    data object Sources : Root
+    data object Add : Root
+    data class Loading(val src: SourceEntry, val force: Boolean) : Root
+    data object Home : Root
+}
+
 @Composable
 fun AppNav() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    var root by remember { mutableStateOf<Root>(Root.Splash) }
     var session by remember { mutableStateOf<Session?>(null) }
     var play by remember { mutableStateOf<PlayReq?>(null) }
     var movieDetail by remember { mutableStateOf<StalkerChannel?>(null) }
     var seriesDetail by remember { mutableStateOf<SeriesEntry?>(null) }
-    var booting by remember { mutableStateOf(true) }
-    var bootError by remember { mutableStateOf<String?>(null) }
-    var bootCancelled by remember { mutableStateOf(false) }
+    var searchOpen by remember { mutableStateOf(false) }
+    var sources by remember { mutableStateOf<List<SourceEntry>>(emptyList()) }
+    var counts by remember { mutableStateOf<Map<String, Triple<Int, Int, Int>>>(emptyMap()) }
+    var lastId by remember { mutableStateOf<String?>(null) }
+    var toastMsg by remember { mutableStateOf<String?>(null) }
 
-    // kayitli oturum varsa uygulamayi direkt iceride ac
-    LaunchedEffect(Unit) {
-        try {
-            val s = tryAutoLogin(ctx)
-            if (!bootCancelled) session = s
-        } catch (e: Exception) {
-            val msg = e.message ?: ""
-            if (msg != "kayıtlı oturum yok" && msg != "kayıt eksik") bootError = msg
-        }
-        if (!bootCancelled) booting = false
-    }
-
-    fun fullLogout() {
-        scope.launch {
-            clearSavedSources(ctx)
-            session = null
-            movieDetail = null
-            seriesDetail = null
-            play = null
+    suspend fun reloadSources() {
+        val list = SourceStore.flow(ctx).first()
+        sources = list
+        lastId = SourceStore.lastId(ctx)
+        counts = list.associate { s ->
+            val c = ContentCache.load(ctx, s.cacheKey())
+            s.cacheKey() to Triple(c?.channels?.size ?: 0, c?.movies?.size ?: 0, c?.series?.size ?: 0)
         }
     }
 
-    fun openPlay(ch: StalkerChannel, url: String, alt: String?, headers: Map<String, String> = emptyMap(), startMs: Long = 0L) {
+    fun openPlay(ch: StalkerChannel, url: String, alt: String?, headers: Map<String, String> = emptyMap()) {
         scope.launch { FavoritesStore.pushRecent(ctx, ch, kind = "live") }
-        play = PlayReq(ch.name, url, alt, isLive = true, startMs = startMs, resumeId = ch.id, headers = headers)
+        play = PlayReq(ch.name, url, alt, isLive = true, resumeId = ch.id, headers = headers)
     }
 
     fun openMoviePlay(movie: StalkerChannel, url: String, startMs: Long = 0L, headers: Map<String, String> = emptyMap()) {
@@ -172,8 +186,7 @@ fun AppNav() {
         val key = "series_" + ep.id
         scope.launch {
             FavoritesStore.pushRecent(
-                ctx,
-                StalkerChannel(key, title, cover, ep.url, "Series"),
+                ctx, StalkerChannel(key, title, cover, ep.url, "Series"),
                 kind = "episode", seriesTitle = seriesName, epIdx = idx
             )
         }
@@ -181,201 +194,154 @@ fun AppNav() {
             episodeIndex = idx, isLive = false, startMs = startMs, resumeId = key)
     }
 
-    when {
-        booting && !bootCancelled -> SplashScreen(
-            error = bootError,
-            onCancel = { bootCancelled = true; booting = false }
+    // kaynak degisince headers: Xtream canli icin Referer
+    fun xtreamHeaders(): Map<String, String> {
+        val s = session ?: return emptyMap()
+        return if (s.xServer.isNotBlank()) mapOf("Referer" to s.xServer.trimEnd('/') + "/") else emptyMap()
+    }
+
+    toastMsg?.let { msg ->
+        LaunchedEffect(msg) {
+            Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+            toastMsg = null
+        }
+    }
+
+    when (val r = root) {
+        Root.Splash -> SplashScreen(onDone = {
+            scope.launch {
+                reloadSources()
+                val last = SourceStore.lastId(ctx)
+                val target = sources.find { it.id == last } ?: sources.firstOrNull()
+                root = if (target != null) Root.Loading(target, force = false) else Root.Sources
+            }
+        })
+        Root.Sources -> SourcesScreen(
+            sources = sources,
+            activeId = session?.sourceId ?: lastId,
+            counts = counts,
+            onPick = { root = Root.Loading(it, force = false) },
+            onAdd = { root = Root.Add },
+            onBack = if (session != null) {
+                { root = Root.Home }
+            } else null
         )
-        play != null -> PlayerScreen(req = play!!, onBack = { play = null })
-        movieDetail != null -> MovieDetailScreen(
+        Root.Add -> AddSourceScreen(
+            initialMac = randomMac(),
+            onDone = { e ->
+                scope.launch {
+                    SourceStore.add(ctx, e)
+                    reloadSources()
+                    root = Root.Loading(e, force = true)
+                }
+            },
+            onBack = {
+                scope.launch { reloadSources() }
+                root = if (sources.isNotEmpty()) Root.Sources else Root.Sources
+            }
+        )
+        is Root.Loading -> LoadingRingScreen(
+            src = r.src,
+            forceRefresh = r.force,
+            onDone = { s, fromCache, added ->
+                session = s
+                scope.launch { reloadSources() }
+                if (!fromCache && added > 0) toastMsg = "$added yeni içerik eklendi"
+                root = Root.Home
+            },
+            onCancel = {
+                root = if (session != null) Root.Home else Root.Sources
+            }
+        )
+        Root.Home -> {
+            val s = session
+            if (s == null) {
+                LaunchedEffect(Unit) { root = Root.Sources }
+            } else {
+                HomeScreen(
+                    session = s,
+                    onSourceSwitch = { root = Root.Sources },
+                    onSearch = { searchOpen = true },
+                    onRefresh = { root = Root.Loading(
+                        SourceEntry(s.sourceId, s.sourceName,
+                            when {
+                                s.stalkerUrl.isNotBlank() -> "stalker"
+                                s.xServer.isNotBlank() -> "xtream"
+                                else -> "m3u"
+                            },
+                            url = s.stalkerUrl.ifBlank { s.xServer },
+                            user = s.stalkerMac.ifBlank { s.xUser },
+                            pass = s.xPass),
+                        force = true
+                    ) },
+                    onLogout = {
+                        scope.launch {
+                            SourceStore.remove(ctx, s.sourceId)
+                            session = null
+                            reloadSources()
+                            root = Root.Sources
+                        }
+                    },
+                    onPlayChannel = { ch, url, alt, h -> openPlay(ch, url, alt, h) },
+                    onOpenMovie = { movieDetail = it },
+                    onOpenSeries = { seriesDetail = it }
+                )
+            }
+        }
+    }
+
+    if (searchOpen && session != null) {
+        SearchScreen(
+            session = session!!,
+            onClose = { searchOpen = false },
+            onPlayChannel = { ch, url, alt, h -> searchOpen = false; openPlay(ch, url, alt, h) },
+            onOpenMovie = { searchOpen = false; movieDetail = it },
+            onOpenSeries = { searchOpen = false; seriesDetail = it }
+        )
+    }
+
+    if (play != null) {
+        PlayerScreen(req = play!!, onBack = { play = null })
+    }
+    if (movieDetail != null && session != null) {
+        MovieDetailScreen(
             movie = movieDetail!!, session = session!!,
             onBack = { movieDetail = null },
             onSelect = { movieDetail = it },
             onPlay = { url, ms, h -> openMoviePlay(movieDetail!!, url, ms, h) }
         )
-        seriesDetail != null -> SeriesDetailScreen(
+    }
+    if (seriesDetail != null && session != null) {
+        SeriesDetailScreen(
             entry = seriesDetail!!, session = session!!,
             onBack = { seriesDetail = null },
             onPlayEpisode = { name, cover, eps, idx, ms -> openEpisode(name, cover, eps, idx, ms) }
         )
-        session == null -> LoginScreen(onDone = { session = it; bootError = null })
-        else -> HomeScreen(
-            session = session!!,
-            onLogout = { fullLogout() },
-            onPlayChannel = { ch, url, alt, h -> openPlay(ch, url, alt, h) },
-            onOpenMovie = { movieDetail = it },
-            onOpenSeries = { seriesDetail = it }
-        )
-    }
-}
-
-// ==================== AÇILIŞ ====================
-
-@Composable
-fun SplashScreen(error: String?, onCancel: () -> Unit) {
-    Column(
-        Modifier.fillMaxSize().background(Bg).padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(Modifier.size(72.dp).clip(RoundedCornerShape(20.dp)).background(AccentRed),
-            contentAlignment = Alignment.Center) {
-            Text("X", color = Color.White, fontWeight = FontWeight.Black, fontSize = 38.sp)
-        }
-        Spacer(Modifier.height(16.dp))
-        Text("XqTV", fontSize = 30.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(12.dp))
-        if (error.isNullOrBlank()) {
-            CircularProgressIndicator(color = Color.White)
-            Spacer(Modifier.height(8.dp))
-            Text("Son oturum açılıyor...", color = Color.Gray, fontSize = 13.sp)
-        } else {
-            Text(error, color = Color(0xFFFF9A9A), fontSize = 13.sp)
-        }
-        Spacer(Modifier.height(20.dp))
-        OutlinedButton(onClick = onCancel, shape = RoundedCornerShape(12.dp)) {
-            Text("Farklı hesapla giriş yap")
-        }
-    }
-}
-
-// ==================== GİRİŞ ====================
-
-@Composable
-fun LoginScreen(onDone: (Session) -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var tab by remember { mutableIntStateOf(0) }
-    var sUrl by remember { mutableStateOf("") }
-    var sMac by remember { mutableStateOf("") }
-    var xServer by remember { mutableStateOf("") }
-    var xUser by remember { mutableStateOf("") }
-    var xPass by remember { mutableStateOf("") }
-    var mUrl by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf("") }
-
-    LaunchedEffect(Unit) {
-        val p = ctx.dataStore.data.first()
-        sUrl = p[KEY_S_URL] ?: ""; sMac = p[KEY_S_MAC] ?: ""
-        xServer = p[KEY_X_SERVER] ?: ""; xUser = p[KEY_X_USER] ?: ""; xPass = p[KEY_X_PASS] ?: ""
-        mUrl = p[KEY_M_URL] ?: ""
-    }
-
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        Box(
-            Modifier.fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color(0xFF1A2340), Bg)))
-                .padding(28.dp, 48.dp, 28.dp, 20.dp)
-        ) {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(52.dp).clip(RoundedCornerShape(14.dp)).background(AccentRed),
-                        contentAlignment = Alignment.Center
-                    ) { Text("X", color = Color.White, fontWeight = FontWeight.Black, fontSize = 28.sp) }
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text("XqTV", fontSize = 30.sp, fontWeight = FontWeight.Black)
-                        Text("Canlı • Film • Dizi", color = Color.Gray, fontSize = 13.sp)
-                    }
-                }
-            }
-        }
-        Column(Modifier.padding(horizontal = 24.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Stalker", "Xtream", "M3U").forEachIndexed { i, t ->
-                    FilterChip(
-                        selected = tab == i, onClick = { tab = i; error = "" },
-                        label = { Text(t, modifier = Modifier.padding(4.dp)) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            when (tab) {
-                0 -> {
-                    OutlinedTextField(sUrl, { sUrl = it }, label = { Text("Portal URL") }, placeholder = { Text("http://host:port/c/") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp))
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(sMac, { sMac = it.uppercase() }, label = { Text("MAC adresi") }, placeholder = { Text("00:1A:79:XX:XX:XX") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp))
-                }
-                1 -> {
-                    OutlinedTextField(xServer, { xServer = it }, label = { Text("Server URL") }, placeholder = { Text("http://host:port") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp))
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(xUser, { xUser = it }, label = { Text("Kullanıcı") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp))
-                        OutlinedTextField(xPass, { xPass = it }, label = { Text("Şifre") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp))
-                    }
-                }
-                2 -> {
-                    OutlinedTextField(mUrl, { mUrl = it }, label = { Text("M3U linki") }, modifier = Modifier.fillMaxWidth(), minLines = 2, shape = RoundedCornerShape(14.dp))
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            if (error.isNotEmpty()) {
-                Text(error, color = Color(0xFFFF9A9A), fontSize = 13.sp,
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0x33FF5252)).padding(12.dp))
-                Spacer(Modifier.height(8.dp))
-            }
-            Button(
-                onClick = {
-                    scope.launch {
-                        loading = true; error = ""
-                        try {
-                            when (tab) {
-                                0 -> {
-                                    val s = loadStalkerSession(sUrl, sMac)
-                                    ctx.dataStore.edit { it[KEY_S_URL] = sUrl.trim(); it[KEY_S_MAC] = sMac.trim() }
-                                    markLastSource(ctx, "stalker")
-                                    onDone(s)
-                                }
-                                1 -> {
-                                    val s = loadXtreamSession(xServer, xUser, xPass)
-                                    ctx.dataStore.edit {
-                                        it[KEY_X_SERVER] = xServer.trim()
-                                        it[KEY_X_USER] = xUser.trim()
-                                        it[KEY_X_PASS] = xPass.trim()
-                                    }
-                                    markLastSource(ctx, "xtream")
-                                    onDone(s)
-                                }
-                                2 -> {
-                                    val s = loadM3uSession(mUrl)
-                                    ctx.dataStore.edit { it[KEY_M_URL] = mUrl.trim() }
-                                    markLastSource(ctx, "m3u")
-                                    onDone(s)
-                                }
-                            }
-                        } catch (e: Exception) { error = e.message ?: "Bağlanamadı" }
-                        loading = false
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(54.dp),
-                shape = RoundedCornerShape(16.dp),
-                enabled = !loading,
-                colors = ButtonDefaults.buttonColors(containerColor = AccentRed)
-            ) { Text(if (loading) "Bağlanıyor..." else "Hemen İzle", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
-            Spacer(Modifier.height(8.dp))
-            Text("Bilgilerin sadece bu cihazda saklanır.", color = Color.Gray, fontSize = 11.sp)
-        }
     }
 }
 
 // ==================== ANA EKRAN ====================
 
 private enum class MainTab(val title: String, val icon: ImageVector) {
-    HOME("Keşfet", Icons.Filled.Home), TV("Canlı", Icons.Filled.Tv), MOVIES("Film", Icons.Filled.Movie), SERIES("Dizi", Icons.Filled.PlayArrow), SEARCH("Ara", Icons.Filled.Search)
+    HOME("Ana Sayfa", Icons.Filled.Home),
+    TV("Canlı TV", Icons.Filled.Tv),
+    MOVIES("Filmler", Icons.Filled.Movie),
+    SERIES("Diziler", Icons.Filled.PlayArrow),
+    SETTINGS("Ayarlar", Icons.Filled.Settings)
 }
 
 @Composable
 fun HomeScreen(
     session: Session,
+    onSourceSwitch: () -> Unit,
+    onSearch: () -> Unit,
+    onRefresh: () -> Unit,
     onLogout: () -> Unit,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
-    var mainTab by remember { mutableStateOf(MainTab.HOME) }
+    var tab by remember { mutableStateOf(MainTab.HOME) }
     val act = LocalContext.current as? Activity
     var lastBack by remember { mutableLongStateOf(0L) }
     BackHandler {
@@ -386,107 +352,81 @@ fun HomeScreen(
             Toast.makeText(act, "Çıkmak için tekrar bas", Toast.LENGTH_SHORT).show()
         }
     }
-    Scaffold(
-        containerColor = Bg,
-        bottomBar = {
-            NavigationBar(containerColor = Card2) {
-                MainTab.entries.forEach { t ->
-                    NavigationBarItem(
-                        selected = mainTab == t, onClick = { mainTab = t },
-                        icon = { Icon(t.icon, null) }, label = { Text(t.title, fontSize = 10.sp) }
-                    )
-                }
-            }
+
+    Box(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
+        when (tab) {
+            MainTab.HOME -> DiscoverTab(session, onSourceSwitch, onSearch, onPlayChannel, onOpenMovie, onOpenSeries)
+            MainTab.TV -> TvTab(session, onPlayChannel)
+            MainTab.MOVIES -> MovieTab(session, onOpenMovie)
+            MainTab.SERIES -> SeriesTab(session, onOpenSeries)
+            MainTab.SETTINGS -> SettingsTab(session, onRefresh, onSourceSwitch, onLogout)
         }
-    ) { pad ->
-        Box(Modifier.padding(pad)) {
-            when (mainTab) {
-                MainTab.HOME -> DiscoverTab(session, onLogout, onPlayChannel, onOpenMovie, onOpenSeries)
-                MainTab.TV -> TvTab(session, onPlayChannel)
-                MainTab.MOVIES -> MovieTab(session, onOpenMovie)
-                MainTab.SERIES -> SeriesTab(session, onOpenSeries)
-                MainTab.SEARCH -> SearchTab(session, onPlayChannel, onOpenMovie, onOpenSeries)
+        // yuzen cam alt menu
+        Row(
+            Modifier.align(Alignment.BottomCenter)
+                .padding(start = 14.dp, end = 14.dp, bottom = 14.dp)
+                .clip(RoundedCornerShape(30.dp))
+                .background(Color(0x9E20202C))
+                .padding(8.dp)
+        ) {
+            MainTab.entries.forEach { t ->
+                val on = tab == t
+                Column(
+                    Modifier.weight(1f).clip(RoundedCornerShape(22.dp))
+                        .background(if (on) Color.White.copy(alpha = 0.12f) else Color.Transparent)
+                        .clickableNoRipple { tab = t }
+                        .padding(vertical = 7.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(t.icon, null, tint = if (on) Color.White else PTx2,
+                        modifier = Modifier.size(23.dp))
+                    Text(t.title, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        color = if (on) Color.White else PTx2)
+                }
             }
         }
     }
 }
+
+@Composable
+private fun HomeHeader(
+    sourceName: String,
+    typeLabel: String,
+    onSourceSwitch: () -> Unit,
+    onSearch: () -> Unit
+) {
+    Row(Modifier.fillMaxWidth().padding(20.dp, 14.dp, 20.dp, 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text("Portio", fontSize = 26.sp, fontWeight = FontWeight.Bold,
+            letterSpacing = (-1).sp, modifier = Modifier.weight(1f))
+        Row(
+            Modifier.clip(RoundedCornerShape(99.dp)).background(PGlass)
+                .clickableNoRipple(onSourceSwitch)
+                .padding(horizontal = 14.dp, vertical = 0.dp).height(36.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(POk))
+            Spacer(Modifier.width(6.dp))
+            Text("$typeLabel · $sourceName", fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 130.dp))
+        }
+        Spacer(Modifier.width(10.dp))
+        Box(
+            Modifier.size(36.dp).clip(CircleShape).background(PGlass)
+                .clickableNoRipple(onSearch),
+            contentAlignment = Alignment.Center
+        ) { Icon(Icons.Filled.Search, "Ara", tint = Color.White, modifier = Modifier.size(18.dp)) }
+    }
+}
+
+// ==================== KESFET ====================
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HeroSlider(
-    items: List<StalkerChannel>,
-    busyId: String?,
-    onOpen: (StalkerChannel) -> Unit
-) {
-    val pager = rememberPagerState(pageCount = { items.size })
-    LaunchedEffect(pager, items.size) {
-        while (items.size > 1) {
-            try {
-                delay(5000)
-                pager.animateScrollToPage((pager.currentPage + 1) % items.size)
-            } catch (_: Exception) { break }
-        }
-    }
-    Column {
-        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth()) { i ->
-            val h = items[i]
-            Box(
-                Modifier.fillMaxWidth().padding(20.dp, 8.dp, 20.dp, 0.dp)
-                    .clip(RoundedCornerShape(22.dp)).background(Card2)
-                    .clickable { onOpen(h) }
-            ) {
-                AsyncImage(model = h.logo, contentDescription = null,
-                    modifier = Modifier.fillMaxWidth().height(220.dp), contentScale = ContentScale.Crop)
-                Box(
-                    Modifier.fillMaxWidth().height(220.dp)
-                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD07090F))))
-                )
-                Column(Modifier.align(Alignment.BottomStart).padding(18.dp)) {
-                    Text("ÖNE ÇIKAN • ${i + 1}/${items.size}", color = AccentRed, fontSize = 11.sp, fontWeight = FontWeight.Black)
-                    Text(h.name, fontSize = 22.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(h.genre, color = Color.LightGray, fontSize = 12.sp, maxLines = 1)
-                    Spacer(Modifier.height(10.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Button(
-                            onClick = { onOpen(h) },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, null, tint = Color.Black)
-                            Text("Oynat", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
-                        if (busyId == h.id) {
-                            Spacer(Modifier.width(10.dp))
-                            CircularProgressIndicator(Modifier.size(24.dp))
-                        }
-                    }
-                }
-            }
-        }
-        // nokta gostergesi
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
-            repeat(items.size) { i ->
-                Box(
-                    Modifier.padding(3.dp).size(if (i == pager.currentPage) 8.dp else 6.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (i == pager.currentPage) Color.White else Color.Gray)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionTitle(title: String, count: Int, modifier: Modifier = Modifier) {
-    Row(modifier.padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, fontWeight = FontWeight.Bold, fontSize = 19.sp, modifier = Modifier.weight(1f))
-        if (count > 0) Text("$count", color = Color.Gray, fontSize = 13.sp)
-    }
-}
-
-@Composable
 fun DiscoverTab(
-    session: Session, onLogout: () -> Unit,
+    session: Session,
+    onSourceSwitch: () -> Unit,
+    onSearch: () -> Unit,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
@@ -498,10 +438,6 @@ fun DiscoverTab(
     val resumeMap by FavoritesStore.resumeFlow(ctx).collectAsState(initial = emptyMap())
     var busy by remember { mutableStateOf<String?>(null) }
 
-    val favChannels = session.channels.filter { favs.contains(it.id) }
-    val favMovies = session.movies.filter { favs.contains(it.id) }
-    val hero = session.movies.firstOrNull() ?: session.channels.firstOrNull()
-
     fun openLive(ch: StalkerChannel) {
         scope.launch {
             busy = ch.id
@@ -511,54 +447,46 @@ fun DiscoverTab(
                     val url = sc.createLink(ch.cmd)
                     if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
                 } else {
+                    val headers = if (session.xServer.isNotBlank())
+                        mapOf("Referer" to session.xServer.trimEnd('/') + "/") else emptyMap()
                     val alt = if (ch.cmd.endsWith(".m3u8")) ch.cmd.dropLast(5) + ".ts" else null
-                    onPlayChannel(ch, ch.cmd, alt, emptyMap())
+                    onPlayChannel(ch, ch.cmd, alt, headers)
                 }
             } finally { busy = null }
         }
     }
 
-    LazyColumn(Modifier.fillMaxSize().background(Bg)) {
+    LazyColumn(
+        Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
+        contentPadding = PaddingValues(bottom = 110.dp)
+    ) {
         item {
-            Row(Modifier.fillMaxWidth().padding(20.dp, 16.dp, 20.dp, 0.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(AccentRed), contentAlignment = Alignment.Center) {
-                    Text("X", color = Color.White, fontWeight = FontWeight.Black, fontSize = 20.sp)
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("XqTV", fontWeight = FontWeight.Black, fontSize = 20.sp)
-                    Text(session.label, color = Color.Gray, fontSize = 11.sp)
-                }
-                IconButton(onClick = onLogout) { Icon(Icons.Filled.ExitToApp, "Çıkış", tint = Color.Gray) }
-            }
+            HomeHeader(
+                sourceName = session.sourceName.ifBlank { session.label },
+                typeLabel = when {
+                    session.stalkerUrl.isNotBlank() -> "Portal"
+                    session.xServer.isNotBlank() -> "Xtream"
+                    else -> "M3U"
+                },
+                onSourceSwitch = onSourceSwitch, onSearch = onSearch
+            )
         }
+        item { HeroSlider(session, busyId = busy, onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries, onOpenLive = { openLive(it) }) }
 
-        // HERO SLIDER (otomatik kayar vitrin)
-        run {
-            val featured = (session.movies.take(5) + session.channels.take(3)).take(6)
-            if (featured.isNotEmpty()) {
-                item {
-                    HeroSlider(
-                        items = featured,
-                        busyId = busy,
-                        onOpen = { h ->
-                            if (h.genre == "VOD" || session.movies.any { it.id == h.id }) onOpenMovie(h)
-                            else openLive(h)
-                        }
-                    )
-                }
-            }
-        }
-
-        // DEVAM ET
         if (recents.isNotEmpty()) {
             item {
-                SectionTitle("İzlemeye devam et", recents.size)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(recents, key = { it.id }) { r ->
+                SectionHead("İzlemeye devam et", 0, "Tümü", onAction = {})
+                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(recents.take(10), key = { it.id }) { r ->
                         val ri = resumeMap[r.id]
                         val prog = if (ri != null && ri.durMs > 0) ri.posMs.toFloat() / ri.durMs else 0f
-                        MiniCard(r.name, r.logo, progress = prog) {
+                        val sub = when {
+                            ri?.kind == "episode" -> "${ri.seriesTitle} · ${remainingText(ri.posMs, ri.durMs)}"
+                            ri != null && ri.durMs > 0 -> "Film · ${remainingText(ri.posMs, ri.durMs)}"
+                            else -> r.genre
+                        }
+                        ContinueCard(r.name, sub, r.logo, prog) {
                             val ch = session.channels.find { it.id == r.id }
                                 ?: session.movies.find { it.id == r.id } ?: r
                             if (session.movies.any { it.id == ch.id }) onOpenMovie(ch) else openLive(ch)
@@ -568,66 +496,342 @@ fun DiscoverTab(
             }
         }
 
-        // LİSTEM
-        if (favChannels.isNotEmpty() || favMovies.isNotEmpty()) {
-            item {
-                SectionTitle("Listem", favChannels.size + favMovies.size)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(favChannels, key = { it.id }) { ch -> MiniCard(ch.name, ch.logo) { openLive(ch) } }
-                    items(favMovies, key = { it.id }) { m -> MiniCard(m.name, m.logo) { onOpenMovie(m) } }
-                }
-            }
-        }
-
-        // CANLI ÖNİZLEME
         if (session.channels.isNotEmpty()) {
             item {
-                SectionTitle("Popüler kanallar", session.channels.size)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(session.channels.take(15), key = { it.id }) { ch ->
-                        ChannelCard(ch, busy == ch.id, favs.contains(ch.id),
-                            onFav = { scope.launch { FavoritesStore.toggle(ctx, ch.id) } },
-                            onClick = { openLive(ch) })
-                    }
-                }
+                SectionHead("Şimdi canlı", session.channels.size, "Rehber", onAction = {})
+                LiveRail(session, onPlay = { openLive(it) }, busyId = busy)
             }
         }
 
-        // FİLMLER
         if (session.movies.isNotEmpty()) {
             item {
-                SectionTitle("Trend filmler", session.movies.size)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(session.movies.take(15), key = { it.id }) { m ->
-                        PosterCard(m.name, m.genre, m.logo) { onOpenMovie(m) }
+                SectionHead("Yeni filmler", session.movies.size, "Tümü", onAction = {})
+                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(session.movies.take(10), key = { it.id }) { m ->
+                        PosterCard128(m.name, m.logo) { onOpenMovie(m) }
                     }
                 }
             }
         }
 
-        // DİZİLER
         if (session.series.isNotEmpty()) {
             item {
-                SectionTitle("Popüler diziler", session.series.size)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(session.series.take(15), key = { it.id }) { s ->
-                        PosterCard(s.name, s.category, s.cover) { onOpenSeries(s) }
+                SectionHead("Popüler diziler", session.series.size, "Tümü", onAction = {})
+                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(session.series.take(10), key = { it.id }) { s ->
+                        PosterCard128(s.name, s.cover) { onOpenSeries(s) }
                     }
                 }
             }
         }
-        item { Spacer(Modifier.height(24.dp)) }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+// ==================== HERO SLIDER ====================
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HeroSlider(
+    session: Session,
+    busyId: String?,
+    onOpenMovie: (StalkerChannel) -> Unit,
+    onOpenSeries: (SeriesEntry) -> Unit,
+    onOpenLive: (StalkerChannel) -> Unit
+) {
+    data class Slide(
+        val badge: String, val title: String, val meta: String,
+        val cta: String, val key: String, val art: String, val open: () -> Unit
+    )
+    val slides = remember(session) {
+        val out = mutableListOf<Slide>()
+        session.movies.take(2).forEach { m ->
+            out.add(Slide("Yeni eklendi", m.name, "Film • ${m.genre}",
+                "Oynat", m.id, m.logo, { onOpenMovie(m) }))
+        }
+        session.series.take(2).forEach { s ->
+            val n = s.episodes.size
+            out.add(Slide("Dizi", s.name, "${s.category} • $n bölüm",
+                "Oynat", s.id, s.cover, { onOpenSeries(s) }))
+        }
+        session.channels.take(1).forEach { c ->
+            out.add(Slide("Canlı", c.name, "${c.genre} • Şimdi",
+                "Canlı izle", c.id, c.logo, { onOpenLive(c) }))
+        }
+        out.take(5)
+    }
+    if (slides.isEmpty()) return
+    val pager = rememberPagerState(pageCount = { slides.size })
+    LaunchedEffect(pager, slides.size) {
+        while (slides.size > 1) {
+            try {
+                delay(6000)
+                pager.animateScrollToPage((pager.currentPage + 1) % slides.size)
+            } catch (_: Exception) { break }
+        }
+    }
+    Column {
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 16.dp), pageSpacing = 12.dp) { i ->
+            val s = slides[i]
+            Box(
+                Modifier.fillMaxWidth().height(470.dp)
+                    .clip(RoundedCornerShape(30.dp))
+                    .background(tileBrush(s.key))
+                    .clickableNoRipple { s.open() }
+            ) {
+                if (s.art.isNotBlank()) {
+                    AsyncImage(model = s.art, contentDescription = null,
+                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+                Box(Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xEB05050C)))
+                ))
+                Column(Modifier.align(Alignment.BottomStart).padding(24.dp)) {
+                    Box(Modifier.clip(RoundedCornerShape(99.dp))
+                        .background(Color.White.copy(alpha = 0.18f))
+                        .padding(11.dp, 5.dp)) {
+                        Text(s.badge, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(s.title, fontSize = 44.sp, lineHeight = 44.sp,
+                        fontWeight = FontWeight.ExtraBold, color = Color.White,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(10.dp))
+                    Text(s.meta, fontSize = 14.sp, color = Color.White.copy(alpha = 0.75f))
+                    Spacer(Modifier.height(18.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { s.open() },
+                            shape = RoundedCornerShape(99.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                            modifier = Modifier.weight(1f).height(50.dp)
+                        ) {
+                            Text("▶  ${s.cta}", color = Color.Black, fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold)
+                        }
+                        Box(Modifier.size(50.dp).clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.16f)),
+                            contentAlignment = Alignment.Center) {
+                            Text("+", color = Color.White, fontSize = 24.sp)
+                        }
+                    }
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp),
+            horizontalArrangement = Arrangement.Center) {
+            repeat(slides.size) { i ->
+                Box(Modifier.padding(3.dp)
+                    .then(
+                        if (i == pager.currentPage) Modifier.width(20.dp).height(6.dp)
+                        else Modifier.size(6.dp)
+                    )
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(
+                        if (i == pager.currentPage) Color.White
+                        else Color.White.copy(alpha = 0.45f)
+                    ))
+            }
+        }
+    }
+}
+
+// ==================== CANLI RAFI (EPG'li) ====================
+
+@Composable
+private fun LiveRail(
+    session: Session,
+    onPlay: (StalkerChannel) -> Unit,
+    busyId: String?
+) {
+    var epg by remember { mutableStateOf<Map<String, EpgEntry>>(emptyMap()) }
+    LaunchedEffect(session.sourceId) {
+        if (session.xServer.isNotBlank()) {
+            try {
+                val x = XtreamClient(session.xServer, session.xUser, session.xPass)
+                coroutineScope {
+                    session.channels.take(12).map { ch ->
+                        async(Dispatchers.IO) {
+                            val sid = ch.id.removePrefix("live_")
+                            val e = if (sid != ch.id) {
+                                try { EpgCache.get(x, sid) } catch (_: Exception) { null }
+                            } else null
+                            ch.id to e
+                        }
+                    }.awaitAll().forEach { (id, e) ->
+                        if (e != null) epg = epg + (id to e)
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+    }
+    LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        items(session.channels.take(15), key = { it.id }) { ch ->
+            LiveCard(ch, epg[ch.id], busyId == ch.id) { onPlay(ch) }
+        }
     }
 }
 
 @Composable
+private fun LiveCard(ch: StalkerChannel, epg: EpgEntry?, busy: Boolean, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF15151F)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, PLine),
+        modifier = Modifier.width(210.dp).height(118.dp)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (ch.logo.isNotBlank()) {
+                    AsyncImage(model = ch.logo, contentDescription = null,
+                        modifier = Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)),
+                        contentScale = ContentScale.Fit)
+                } else {
+                    Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp))
+                        .background(tileBrush(ch.id)),
+                        contentAlignment = Alignment.Center) {
+                        Text(initialsOf(ch.name), color = Color.White,
+                            fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(ch.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                LiveBadge()
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(epg?.title ?: ch.genre, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(epg?.range() ?: "", fontSize = 12.sp, color = PTx2,
+                maxLines = 1, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
+            if (busy) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(4.dp))
+            } else if (epg != null) {
+                ProgressLine(epg.progress(), color = PLive)
+            } else {
+                Spacer(Modifier.height(4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveBadge() {
+    var blink by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1600)
+            blink = !blink
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(6.dp).clip(CircleShape)
+            .background(PLive.copy(alpha = if (blink) 1f else 0.25f)))
+        Spacer(Modifier.width(4.dp))
+        Text("CANLI", color = PLive, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+// ==================== KARTLAR ====================
+
+@Composable
+fun ContinueCard(title: String, sub: String, logo: String, progress: Float, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.width(236.dp).height(132.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent)
+    ) {
+        Box(Modifier.fillMaxSize().background(tileBrush(title))) {
+            if (logo.isNotBlank()) {
+                AsyncImage(model = logo, contentDescription = null,
+                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+            Box(Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000)))
+            ))
+            Column(Modifier.align(Alignment.BottomStart).padding(12.dp)) {
+                Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (sub.isNotBlank()) {
+                    Text(sub, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (progress > 0.02f) {
+                    Spacer(Modifier.height(6.dp))
+                    ProgressLine(progress)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PosterCard128(title: String, logo: String, onClick: () -> Unit) {
+    Column(Modifier.width(128.dp).clickableNoRipple(onClick),
+        horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+            .clip(RoundedCornerShape(18.dp))
+            .background(tileBrush(title))) {
+            if (logo.isNotBlank()) {
+                AsyncImage(model = logo, contentDescription = null,
+                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+            Box(Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000)))
+            ))
+            Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 17.sp,
+                modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
+        }
+    }
+}
+
+@Composable
+fun ChannelCard(ch: StalkerChannel, busy: Boolean, isFav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF15151F)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, PLine),
+        modifier = Modifier.height(186.dp)
+    ) {
+        Box(Modifier.padding(10.dp)) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.fillMaxWidth().height(96.dp), contentAlignment = Alignment.Center) {
+                    if (ch.logo.isNotBlank()) {
+                        AsyncImage(model = ch.logo, contentDescription = null,
+                            modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    } else {
+                        Text(initialsOf(ch.name), fontSize = 30.sp,
+                            fontWeight = FontWeight.ExtraBold, color = PTx2)
+                    }
+                    if (busy) CircularProgressIndicator(Modifier.size(26.dp))
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(ch.name, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold, lineHeight = 16.sp,
+                    modifier = Modifier.height(34.dp))
+                Text(ch.genre, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    fontSize = 11.sp, color = PTx2)
+            }
+        }
+    }
+}
+
+// ==================== SEKMELER ====================
+
+@Composable
 fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit) {
-    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var cat by remember { mutableStateOf("Tümü") }
     var q by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf<String?>(null) }
-    val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
 
     val cats = remember(session) { listOf("Tümü") + session.channels.map { it.genre }.distinct().sorted() }
     val list = session.channels.filter {
@@ -643,27 +847,34 @@ fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?, Map
                     val url = sc.createLink(ch.cmd)
                     if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
                 } else {
+                    val headers = if (session.xServer.isNotBlank())
+                        mapOf("Referer" to session.xServer.trimEnd('/') + "/") else emptyMap()
                     val alt = if (ch.cmd.endsWith(".m3u8")) ch.cmd.dropLast(5) + ".ts" else null
-                    onPlayChannel(ch, ch.cmd, alt, emptyMap())
+                    onPlayChannel(ch, ch.cmd, alt, headers)
                 }
             } finally { busy = null }
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        SectionTitle("Canlı TV", list.size)
+    Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
+        SectionHead("Canlı TV", list.size)
         OutlinedTextField(q, { q = it }, label = { Text("Kanal ara...") },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(14.dp))
-        LazyRow(contentPadding = PaddingValues(20.dp, 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(cats) { c -> FilterChip(selected = cat == c, onClick = { cat = c }, label = { Text(c) }) }
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            shape = RoundedCornerShape(14.dp))
+        LazyRow(contentPadding = PaddingValues(20.dp, 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(cats) { c ->
+                FilterChip(selected = cat == c, onClick = { cat = c }, label = { Text(c) },
+                    shape = RoundedCornerShape(99.dp))
+            }
         }
-        LazyVerticalGrid(columns = GridCells.Adaptive(160.dp), contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        LazyVerticalGrid(columns = GridCells.Adaptive(160.dp),
+            contentPadding = PaddingValues(20.dp, 8.dp, 20.dp, 110.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f)) {
             items(list, key = { it.id }) { ch ->
-                ChannelCard(ch, busy == ch.id, favs.contains(ch.id),
-                    onFav = { scope.launch { FavoritesStore.toggle(ctx, ch.id) } },
-                    onClick = { open(ch) })
+                ChannelCard(ch, busy == ch.id, false, {}, { open(ch) })
             }
         }
     }
@@ -677,17 +888,54 @@ fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
     val list = session.movies.filter {
         (cat == "Tümü" || it.genre == cat) && (q.isBlank() || it.name.contains(q, true))
     }
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        SectionTitle("Filmler", list.size)
-        OutlinedTextField(q, { q = it }, label = { Text("Film ara...") },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(14.dp))
-        LazyRow(contentPadding = PaddingValues(20.dp, 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(cats) { c -> FilterChip(selected = cat == c, onClick = { cat = c }, label = { Text(c) }) }
+    val feat = list.firstOrNull()
+    Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
+        Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
+            verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Text("Filmler", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-1.5).sp)
+                Text("${list.size} film", color = PTx2, fontSize = 14.sp)
+            }
         }
-        LazyVerticalGrid(columns = GridCells.Adaptive(140.dp), contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        LazyRow(contentPadding = PaddingValues(20.dp, 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(cats) { c ->
+                FilterChip(selected = cat == c, onClick = { cat = c }, label = { Text(c) },
+                    shape = RoundedCornerShape(99.dp))
+            }
+        }
+        if (feat != null && q.isBlank() && cat == "Tümü") {
+            Box(
+                Modifier.fillMaxWidth().padding(20.dp, 8.dp, 20.dp, 0.dp).height(300.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(tileBrush(feat.id))
+                    .clickableNoRipple { onOpenMovie(feat) }
+            ) {
+                if (feat.logo.isNotBlank()) {
+                    AsyncImage(model = feat.logo, contentDescription = null,
+                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+                Box(Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xE605050C)))
+                ))
+                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
+                    Text("Öne çıkan", color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text(feat.name, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
+                        color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(feat.genre, fontSize = 14.sp, color = Color.White.copy(alpha = 0.75f))
+                }
+            }
+        }
+        LazyVerticalGrid(columns = GridCells.Fixed(3),
+            contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 110.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f)) {
-            items(list, key = { it.id }) { m -> PosterCard(m.name, m.genre, m.logo) { onOpenMovie(m) } }
+            items(list, key = { it.id }) { m ->
+                PosterCard128(m.name, m.logo) { onOpenMovie(m) }
+            }
         }
     }
 }
@@ -696,32 +944,188 @@ fun MovieTab(session: Session, onOpenMovie: (StalkerChannel) -> Unit) {
 fun SeriesTab(session: Session, onOpenSeries: (SeriesEntry) -> Unit) {
     var q by remember { mutableStateOf("") }
     val list = session.series.filter { q.isBlank() || it.name.contains(q, true) }
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        SectionTitle("Diziler", list.size)
-        if (session.series.isEmpty()) {
-            Text("Bu kaynakta dizi yok. Xtream ile giriş yap.", color = Color.Gray, modifier = Modifier.padding(20.dp))
-            return@Column
+    val feat = list.firstOrNull()
+    Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
+        Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
+            verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Text("Diziler", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-1.5).sp)
+                Text("${list.size} dizi", color = PTx2, fontSize = 14.sp)
+            }
         }
         OutlinedTextField(q, { q = it }, label = { Text("Dizi ara...") },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(14.dp))
-        Spacer(Modifier.height(8.dp))
-        LazyVerticalGrid(columns = GridCells.Adaptive(140.dp), contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            shape = RoundedCornerShape(14.dp))
+        if (feat != null && q.isBlank()) {
+            Box(
+                Modifier.fillMaxWidth().padding(20.dp, 12.dp, 20.dp, 0.dp).height(300.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(tileBrush(feat.id))
+                    .clickableNoRipple { onOpenSeries(feat) }
+            ) {
+                if (feat.cover.isNotBlank()) {
+                    AsyncImage(model = feat.cover, contentDescription = null,
+                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+                Box(Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xE605050C)))
+                ))
+                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
+                    Text("Yeni sezon", color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text(feat.name, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
+                        color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${feat.category} • ${feat.episodes.size} bölüm", fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.75f))
+                }
+            }
+        }
+        if (session.series.isEmpty()) {
+            Text("Bu kaynakta dizi yok.", color = PTx2, modifier = Modifier.padding(20.dp))
+        }
+        LazyVerticalGrid(columns = GridCells.Fixed(3),
+            contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 110.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f)) {
-            items(list, key = { it.id }) { s -> PosterCard(s.name, s.category, s.cover) { onOpenSeries(s) } }
+            items(list, key = { it.id }) { s ->
+                PosterCard128(s.name, s.cover) { onOpenSeries(s) }
+            }
         }
     }
 }
 
 @Composable
-fun SearchTab(
+fun SettingsTab(
     session: Session,
+    onRefresh: () -> Unit,
+    onSourceSwitch: () -> Unit,
+    onLogout: () -> Unit
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val autoplay by FavoritesStore.autoplayFlow(ctx).collectAsState(initial = true)
+    val (audioPref, subPref) = FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off")).value
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
+        contentPadding = PaddingValues(20.dp, 18.dp, 20.dp, 110.dp)
+    ) {
+        item {
+            Text("Ayarlar", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-1.5).sp)
+            Spacer(Modifier.height(16.dp))
+            SourceCard(
+                name = session.sourceName.ifBlank { session.label },
+                sub = "${when {
+                    session.stalkerUrl.isNotBlank() -> "Portal"
+                    session.xServer.isNotBlank() -> "Xtream Codes"
+                    else -> "M3U"
+                }} · ${session.channels.size} kanal · ${session.movies.size} film · ${session.series.size} dizi",
+                tile = when {
+                    session.stalkerUrl.isNotBlank() -> "PT"
+                    session.xServer.isNotBlank() -> "XT"
+                    else -> "M3U"
+                },
+                active = true, onClick = onSourceSwitch
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+        item {
+            SettingsRow("İçeriği yenile", "Sunucudan güncel listeyi çek") { onRefresh() }
+            SettingsRow(
+                "Otomatik oynat",
+                if (autoplay) "Bölüm bitince sıradaki başlar" else "Kapalı",
+                check = autoplay,
+                onCheck = { scope.launch { FavoritesStore.setAutoplay(ctx, it) } }
+            ) { }
+            SettingsRow(
+                "Varsayılan ses",
+                when (audioPref) {
+                    "tr" -> "Türkçe"
+                    "en" -> "İngilizce"
+                    else -> "Otomatik"
+                }
+            ) { }
+            SettingsRow(
+                "Varsayılan altyazı",
+                when (subPref) {
+                    "tr" -> "Türkçe"
+                    "en" -> "İngilizce"
+                    "auto" -> "Otomatik"
+                    else -> "Kapalı"
+                }
+            ) { }
+            SettingsRow("Kaynak değiştir", "Kayıtlı listeler") { onSourceSwitch() }
+            if (!confirmDelete) {
+                SettingsRow("Kaynağı sil", "Bu cihazdan kaldır", danger = true) {
+                    confirmDelete = true
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    OutlinedButton(onClick = { confirmDelete = false },
+                        modifier = Modifier.weight(1f)) { Text("Vazgeç") }
+                    Button(
+                        onClick = onLogout,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = PLive)
+                    ) { Text("Evet, sil", color = Color.White) }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+            Text("Portio v2.0 • Tüm yayınların tek yerde.",
+                color = PTx2, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun SettingsRow(
+    title: String,
+    sub: String,
+    danger: Boolean = false,
+    check: Boolean? = null,
+    onCheck: ((Boolean) -> Unit)? = null,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = PGlass),
+        border = androidx.compose.foundation.BorderStroke(1.dp, PLine),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                    color = if (danger) PLive else Color.White)
+                Text(sub, fontSize = 13.sp, color = PTx2)
+            }
+            if (check != null && onCheck != null) {
+                Switch(checked = check, onCheckedChange = onCheck)
+            } else {
+                Text("›", color = PTx2, fontSize = 20.sp)
+            }
+        }
+    }
+}
+
+// ==================== ARAMA ====================
+
+@Composable
+fun SearchScreen(
+    session: Session,
+    onClose: () -> Unit,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
-    var q by remember { mutableStateOf("") }
+    BackHandler { onClose() }
     val scope = rememberCoroutineScope()
+    var q by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf<String?>(null) }
 
     fun openLive(ch: StalkerChannel) {
@@ -733,462 +1137,93 @@ fun SearchTab(
                     val url = sc.createLink(ch.cmd)
                     if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
                 } else {
+                    val headers = if (session.xServer.isNotBlank())
+                        mapOf("Referer" to session.xServer.trimEnd('/') + "/") else emptyMap()
                     val url = ch.cmd
                     val alt = if (url.endsWith(".m3u8")) url.dropLast(5) + ".ts" else null
-                    if (url.isNotBlank()) onPlayChannel(ch, url, alt, emptyMap())
+                    if (url.isNotBlank()) onPlayChannel(ch, url, alt, headers)
                 }
             } finally { busy = null }
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        SectionTitle("Ara", 0)
+    Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
+        Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("Ara", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.weight(1f))
+            TextButton(onClick = onClose) { Text("Kapat", color = PTx2) }
+        }
         OutlinedTextField(q, { q = it }, label = { Text("Kanal, film, dizi...") },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(14.dp))
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            shape = RoundedCornerShape(14.dp), singleLine = true)
         Spacer(Modifier.height(8.dp))
         if (q.isBlank()) {
-            Text("Örn: spor, aksiyon, haber...", color = Color.Gray, modifier = Modifier.padding(20.dp))
+            Text("Örn: spor, aksiyon, haber...", color = PTx2,
+                modifier = Modifier.padding(20.dp))
             return@Column
         }
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(20.dp)) {
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(8.dp, 8.dp, 8.dp, 20.dp)) {
             val chs = session.channels.filter { it.name.contains(q, true) }.take(30)
             val mvs = session.movies.filter { it.name.contains(q, true) }.take(30)
             val srs = session.series.filter { it.name.contains(q, true) }.take(20)
             if (chs.isNotEmpty()) {
-                item { Text("Kanallar", fontWeight = FontWeight.Bold) }
+                item { Text("Kanallar", fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(20.dp, 8.dp, 20.dp, 4.dp)) }
                 items(chs, key = { "c" + it.id }) { ch ->
                     ListItem(
-                        headlineContent = { Text(ch.name) }, supportingContent = { Text(ch.genre) },
-                        leadingContent = { AsyncImage(model = ch.logo, contentDescription = null, modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp))) },
-                        trailingContent = { if (busy == ch.id) CircularProgressIndicator(Modifier.size(22.dp)) },
-                        modifier = Modifier.clickable { openLive(ch) }
+                        headlineContent = { Text(ch.name) },
+                        supportingContent = { Text(ch.genre) },
+                        leadingContent = {
+                            if (ch.logo.isNotBlank()) AsyncImage(model = ch.logo,
+                                contentDescription = null,
+                                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)))
+                        },
+                        trailingContent = {
+                            if (busy == ch.id) CircularProgressIndicator(Modifier.size(22.dp))
+                        },
+                        modifier = Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { openLive(ch) }
                     )
                 }
             }
             if (mvs.isNotEmpty()) {
-                item { Text("Filmler", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp)) }
+                item { Text("Filmler", fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(20.dp, 12.dp, 20.dp, 4.dp)) }
                 items(mvs, key = { "m" + it.id }) { m ->
                     ListItem(
                         headlineContent = { Text(m.name) },
-                        leadingContent = { AsyncImage(model = m.logo, contentDescription = null, modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp))) },
-                        modifier = Modifier.clickable { onOpenMovie(m) }
+                        leadingContent = {
+                            if (m.logo.isNotBlank()) AsyncImage(model = m.logo,
+                                contentDescription = null,
+                                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)))
+                        },
+                        modifier = Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onOpenMovie(m) }
                     )
                 }
             }
             if (srs.isNotEmpty()) {
-                item { Text("Diziler", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp)) }
+                item { Text("Diziler", fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(20.dp, 12.dp, 20.dp, 4.dp)) }
                 items(srs, key = { "s" + it.id }) { s ->
                     ListItem(
                         headlineContent = { Text(s.name) },
-                        leadingContent = { AsyncImage(model = s.cover, contentDescription = null, modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp))) },
-                        modifier = Modifier.clickable { onOpenSeries(s) }
+                        leadingContent = {
+                            if (s.cover.isNotBlank()) AsyncImage(model = s.cover,
+                                contentDescription = null,
+                                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)))
+                        },
+                        modifier = Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onOpenSeries(s) }
                     )
                 }
-            }
-        }
-    }
-}
-
-// ==================== DETAYLAR ====================
-
-@Composable
-fun MovieDetailScreen(movie: StalkerChannel, session: Session, onBack: () -> Unit, onSelect: (StalkerChannel) -> Unit, onPlay: (String, Long, Map<String, String>) -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
-    var detail by remember { mutableStateOf<VodDetail?>(null) }
-    var busy by remember { mutableStateOf(false) }
-
-    LaunchedEffect(movie.id) {
-        detail = null
-        if (session.xServer.isNotEmpty() && movie.id.startsWith("vod_")) {
-            try {
-                detail = XtreamClient(session.xServer, session.xUser, session.xPass)
-                    .vodInfo(movie.id.removePrefix("vod_"))
-            } catch (_: Exception) { }
-        }
-    }
-
-    val similar = remember(movie.id, session) {
-        session.movies.filter { it.id != movie.id && it.genre == movie.genre }.take(12)
-            .ifEmpty { session.movies.filter { it.id != movie.id }.take(12) }
-    }
-
-    BackHandler { onBack() }
-    val resume by FavoritesStore.entryFlow(ctx, movie.id).collectAsState(initial = null)
-
-    fun playNow(fromMs: Long = 0L) {
-        scope.launch {
-            busy = true
-            try {
-                if (session.stalkerUrl.isNotEmpty()) {
-                    val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
-                    val url = sc.createLink(movie.cmd)
-                    if (url.isNotBlank()) onPlay(url, fromMs, sc.streamHeaders())
-                } else if (movie.cmd.isNotBlank()) onPlay(movie.cmd, fromMs, emptyMap())
-            } finally { busy = false }
-        }
-    }
-
-    LazyColumn(Modifier.fillMaxSize().background(Bg)) {
-        item {
-            // --- vitrin ---
-            Box(Modifier.fillMaxWidth()) {
-                AsyncImage(
-                    model = detail?.cover?.ifBlank { movie.logo } ?: movie.logo,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxWidth().height(340.dp),
-                    contentScale = ContentScale.Crop
-                )
-                Box(
-                    Modifier.fillMaxWidth().height(340.dp).background(
-                        Brush.verticalGradient(
-                            listOf(Color(0x55000000), Color.Transparent, Bg),
-                            startY = 0f, endY = 900f
-                        )
-                    )
-                )
-                TextButton(onClick = onBack, modifier = Modifier.padding(10.dp)) {
-                    Text("< Geri", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-                Column(Modifier.align(Alignment.BottomStart).padding(20.dp, 12.dp)) {
-                    Text("FİLM", color = AccentRed, fontSize = 12.sp, fontWeight = FontWeight.Black)
-                    Text(movie.name, fontSize = 30.sp, fontWeight = FontWeight.Black, lineHeight = 32.sp)
-                }
-            }
-            // --- meta ---
-            Column(Modifier.padding(20.dp, 4.dp, 20.dp, 0.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (detail?.rating?.isNotBlank() == true) {
-                        Icon(Icons.Filled.Star, null, tint = Color(0xFFFFC107), modifier = Modifier.size(17.dp))
-                        Text(detail!!.rating, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    }
-                    if (detail?.year?.isNotBlank() == true) MetaChip(detail!!.year)
-                    if (detail?.duration?.isNotBlank() == true) MetaChip(detail!!.duration)
-                    MetaChip("HD")
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    listOfNotNull(
-                        movie.genre.takeIf { it.isNotBlank() },
-                        detail?.genre?.takeIf { it.isNotBlank() }
-                    ).distinct().joinToString(" • "),
-                    color = Color.Gray, fontSize = 12.sp
-                )
-                Spacer(Modifier.height(14.dp))
-                // --- aksiyonlar (Netflix tarzi) ---
-                Button(
-                    onClick = { playNow(if (resume?.hasValid() == true) resume!!.posMs else 0L) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    enabled = !busy
-                ) {
-                    Icon(Icons.Filled.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(26.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (busy) "Açılıyor..."
-                        else if (resume?.hasValid() == true) "Devam Et (${fmtMs(resume!!.posMs)})"
-                        else "Oynat",
-                        color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 16.sp
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                if (resume?.hasValid() == true) {
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = { playNow(0L) },
-                        shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().height(48.dp),
-                        enabled = !busy
-                    ) { Text("Baştan Oynat", fontSize = 13.sp) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
-                        onClick = { scope.launch { FavoritesStore.toggle(ctx, movie.id) } },
-                        shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) {
-                        Icon(
-                            if (favs.contains(movie.id)) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                            null,
-                            tint = if (favs.contains(movie.id)) AccentRed else Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (favs.contains(movie.id)) "Listemde ✓" else "+ Listeye Ekle", fontSize = 13.sp)
-                    }
-                }
-                if (detail?.plot?.isNotBlank() == true) {
-                    Spacer(Modifier.height(16.dp))
-                    Text(detail!!.plot, color = Color.White.copy(alpha = 0.92f), fontSize = 14.sp, lineHeight = 20.sp)
-                }
-                if (detail?.cast?.isNotBlank() == true) {
-                    Spacer(Modifier.height(10.dp))
-                    Text("Oyuncular: ", color = Color.Gray, fontSize = 12.sp)
-                    Text(detail!!.cast, color = Color.Gray, fontSize = 13.sp)
-                }
-                if (detail?.director?.isNotBlank() == true) {
-                    Spacer(Modifier.height(4.dp))
-                    Text("Yönetmen: ${detail!!.director}", color = Color.Gray, fontSize = 13.sp)
-                }
-            }
-        }
-        if (similar.isNotEmpty()) {
-            item {
-                Spacer(Modifier.height(18.dp))
-                Text("Bunları da beğenebilirsin", fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                    modifier = Modifier.padding(horizontal = 20.dp))
-                Spacer(Modifier.height(8.dp))
-            }
-            item {
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(similar, key = { it.id }) { m ->
-                        PosterCard(m.name, m.genre, m.logo) { onSelect(m) }
-                    }
-                }
-                Spacer(Modifier.height(24.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun MetaChip(t: String) {
-    Text(t, fontSize = 11.sp, color = Color.LightGray,
-        modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Card2).padding(6.dp, 3.dp))
-}
-
-@Composable
-fun SeriesDetailScreen(
-    entry: SeriesEntry,
-    session: Session,
-    onBack: () -> Unit,
-    onPlayEpisode: (String, String, List<EpisodeEntry>, Int, Long) -> Unit
-) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    BackHandler { onBack() }
-    val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
-    val resumeMap by FavoritesStore.resumeFlow(ctx).collectAsState(initial = emptyMap())
-    var full by remember { mutableStateOf<SeriesEntry?>(if (entry.episodes.isNotEmpty()) entry else null) }
-    var season by remember { mutableIntStateOf(-1) }
-    var loading by remember { mutableStateOf(false) }
-
-    var resumeEpIdx by remember { mutableIntStateOf(-1) }
-    var resumeMs by remember { mutableLongStateOf(0L) }
-
-    LaunchedEffect(entry.id) {
-        full = if (entry.episodes.isNotEmpty()) entry else null
-        if (full == null && session.xServer.isNotEmpty()) {
-            loading = true
-            try {
-                full = XtreamClient(session.xServer, session.xUser, session.xPass).seriesEpisodes(entry.id) ?: entry
-                season = full?.episodes?.firstOrNull()?.season ?: -1
-            } finally { loading = false }
-        } else season = entry.episodes.firstOrNull()?.season ?: -1
-    }
-
-    // kaldigi bolum: kayitli siraya gore ilk gecerli pozisyon
-    LaunchedEffect(full) {
-        val eps = full?.episodes ?: return@LaunchedEffect
-        val idx = FavoritesStore.seriesResumeIdx(ctx, eps.map { "series_" + it.id })
-        if (idx >= 0) {
-            resumeEpIdx = idx
-            val info = FavoritesStore.resumeFlow(ctx).first()[("series_" + eps[idx].id)]
-            resumeMs = info?.posMs ?: 0L
-            season = eps[idx].season
-        }
-    }
-
-    val seasons = remember(full) { full?.episodes?.map { it.season }?.distinct()?.sorted() ?: emptyList() }
-    val eps = remember(full, season) { full?.episodes?.filter { season == -1 || it.season == season } ?: emptyList() }
-    val allEps = remember(full) { full?.episodes ?: emptyList() }
-
-    LazyColumn(Modifier.fillMaxSize().background(Bg)) {
-        item {
-            // --- vitrin ---
-            Box(Modifier.fillMaxWidth()) {
-                AsyncImage(model = entry.cover, contentDescription = null,
-                    modifier = Modifier.fillMaxWidth().height(300.dp), contentScale = ContentScale.Crop)
-                Box(
-                    Modifier.fillMaxWidth().height(300.dp).background(
-                        Brush.verticalGradient(listOf(Color(0x55000000), Color.Transparent, Bg))
-                    )
-                )
-                TextButton(onClick = onBack, modifier = Modifier.padding(10.dp)) {
-                    Text("< Geri", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-                Column(Modifier.align(Alignment.BottomStart).padding(20.dp, 12.dp)) {
-                    Text("DİZİ • ${entry.category}", color = AccentRed, fontSize = 12.sp, fontWeight = FontWeight.Black)
-                    Text(entry.name, fontSize = 30.sp, fontWeight = FontWeight.Black, lineHeight = 32.sp)
-                    Text(
-                        if (loading) "Bölümler yükleniyor..."
-                        else "${seasons.size} Sezon • ${allEps.size} Bölüm",
-                        color = Color.LightGray, fontSize = 13.sp
-                    )
-                }
-            }
-            Column(Modifier.padding(20.dp, 4.dp, 20.dp, 0.dp)) {
-                val resumeEp = allEps.getOrNull(resumeEpIdx)
-                Button(
-                    onClick = {
-                        if (allEps.isEmpty()) return@Button
-                        if (resumeEp != null) onPlayEpisode(entry.name, entry.cover, allEps, resumeEpIdx, resumeMs)
-                        else onPlayEpisode(entry.name, entry.cover, allEps, 0, 0L)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    enabled = !loading && allEps.isNotEmpty()
-                ) {
-                    Icon(Icons.Filled.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(26.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        if (loading) "Yükleniyor..."
-                        else if (resumeEp != null) "S${resumeEp.season} B${resumeEp.episode} • Devam Et (${fmtMs(resumeMs)})"
-                        else "Oynat",
-                        color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 16.sp
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = { scope.launch { FavoritesStore.toggle(ctx, entry.id) } },
-                    shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Icon(
-                        if (favs.contains(entry.id)) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        null,
-                        tint = if (favs.contains(entry.id)) AccentRed else Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (favs.contains(entry.id)) "Listemde ✓" else "+ Listeye Ekle", fontSize = 13.sp)
-                }
-                Spacer(Modifier.height(16.dp))
-                Text("Bölümler", fontWeight = FontWeight.Bold, fontSize = 19.sp)
-                if (seasons.size > 1) {
-                    Spacer(Modifier.height(8.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(seasons) { s ->
-                            FilterChip(selected = season == s, onClick = { season = s }, label = { Text("Sezon $s") })
-                        }
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-        }
-        items(eps, key = { it.id }) { ep ->
-            val idx = allEps.indexOfFirst { it.id == ep.id }
-            val epProg = resumeMap[("series_" + ep.id)]?.let { ri ->
-                if (ri.durMs > 0) ri.posMs.toFloat() / ri.durMs else 0f
-            } ?: 0f
-            Card(
-                modifier = Modifier.fillMaxWidth().height(108.dp).padding(horizontal = 20.dp, vertical = 5.dp)
-                    .clickable { onPlayEpisode(entry.name, entry.cover, allEps, idx, 0L) },
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Card2)
-            ) {
-                Column(Modifier.padding(10.dp, 10.dp, 10.dp, 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        Text("${ep.episode}", fontSize = 26.sp, fontWeight = FontWeight.Black, color = Color.Gray,
-                            modifier = Modifier.width(38.dp))
-                        AsyncImage(model = ep.cover.ifBlank { entry.cover }, contentDescription = null,
-                            modifier = Modifier.width(118.dp).height(62.dp).clip(RoundedCornerShape(10.dp)),
-                            contentScale = ContentScale.Crop)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("S${ep.season} • B${ep.episode}", color = AccentRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Text(ep.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(ep.url.substringAfterLast(".").uppercase() + " • HD", color = Color.Gray, fontSize = 11.sp)
-                        }
-                        Box(Modifier.size(42.dp).clip(RoundedCornerShape(21.dp)).background(Color.White),
-                            contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.PlayArrow, null, tint = Color.Black, modifier = Modifier.size(24.dp))
-                        }
-                    }
-                    if (epProg > 0.02f) {
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { epProg.coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
-                            color = AccentRed, trackColor = Color(0xFF2A3040)
-                        )
-                    }
-                }
-            }
-        }
-        item { Spacer(Modifier.height(24.dp)) }
-    }
-}
-
-// ==================== KARTLAR ====================
-
-@Composable
-fun ChannelCard(ch: StalkerChannel, busy: Boolean, isFav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
-    Card(modifier = Modifier.height(186.dp).clickable(onClick = onClick), shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Card2)) {
-        Box(Modifier.padding(10.dp)) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.fillMaxWidth().height(96.dp), contentAlignment = Alignment.Center) {
-                    if (ch.logo.isNotBlank()) AsyncImage(model = ch.logo, contentDescription = null,
-                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                    else Text(ch.name.take(2).uppercase(), fontSize = 30.sp, fontWeight = FontWeight.Black, color = Color.Gray)
-                    if (busy) CircularProgressIndicator(Modifier.size(26.dp))
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(ch.name, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold, lineHeight = 16.sp, modifier = Modifier.height(34.dp))
-                Text(ch.genre, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Color.Gray)
-            }
-            IconButton(onClick = onFav, modifier = Modifier.align(Alignment.TopEnd).size(30.dp)) {
-                Icon(
-                    if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, null,
-                    tint = if (isFav) AccentRed else Color.Gray, modifier = Modifier.size(18.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun PosterCard(title: String, subtitle: String, logo: String, onClick: () -> Unit) {
-    Card(modifier = Modifier.width(150.dp).height(300.dp).clickable(onClick = onClick), shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Card2)) {
-        Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.fillMaxWidth().height(196.dp), contentAlignment = Alignment.Center) {
-                if (logo.isNotBlank()) AsyncImage(model = logo, contentDescription = null,
-                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
-                else Text(title.take(2).uppercase(), fontSize = 30.sp, fontWeight = FontWeight.Black, color = Color.Gray)
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold, lineHeight = 16.sp, modifier = Modifier.height(34.dp))
-            Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = Color.Gray)
-        }
-    }
-}
-
-@Composable
-fun MiniCard(title: String, logo: String, progress: Float = 0f, onClick: () -> Unit) {
-    Card(modifier = Modifier.width(230.dp).height(76.dp).clickable(onClick = onClick), shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Card2)) {
-        Column(Modifier.padding(10.dp, 10.dp, 10.dp, 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (logo.isNotBlank()) AsyncImage(model = logo, contentDescription = null,
-                    modifier = Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Fit)
-                else Box(Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF232B45)), contentAlignment = Alignment.Center) {
-                    Text(title.take(1).uppercase(), fontWeight = FontWeight.Black)
-                }
-                Spacer(Modifier.width(10.dp))
-                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Icon(Icons.Filled.PlayArrow, null, tint = Color.Gray, modifier = Modifier.size(22.dp))
-            }
-            if (progress > 0.02f) {
-                Spacer(Modifier.height(6.dp))
-                LinearProgressIndicator(
-                    progress = { progress.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
-                    color = AccentRed, trackColor = Color(0xFF2A3040)
-                )
             }
         }
     }
