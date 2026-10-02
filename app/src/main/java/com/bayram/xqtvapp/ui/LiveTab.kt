@@ -30,6 +30,7 @@ import coil.compose.AsyncImage
 import com.bayram.xqtvapp.CatChips
 import com.bayram.xqtvapp.Session
 import com.bayram.xqtvapp.data.EpgCache
+import com.bayram.xqtvapp.data.EpgXml
 import com.bayram.xqtvapp.data.EpgEntry
 import com.bayram.xqtvapp.data.FavoritesStore
 import com.bayram.xqtvapp.data.StalkerChannel
@@ -78,22 +79,19 @@ fun TvTab(
         }
     }
 
-    // gorunur kanallarin su anki yayini
+    // gorunur kanallarin su anki yayini (kaynak + internet XMLTV yedegi)
     var nowMap by remember { mutableStateOf<Map<String, EpgEntry?>>(emptyMap()) }
+    var epgDone by remember { mutableStateOf(false) }
     LaunchedEffect(list, session.sourceId) {
-        if (session.xServer.isBlank()) {
-            nowMap = emptyMap()
-            return@LaunchedEffect
-        }
+        epgDone = false
+        nowMap = emptyMap()
         try {
-            val x = XtreamClient(session.xServer, session.xUser, session.xPass)
             coroutineScope {
                 list.take(40).map { ch ->
                     async(Dispatchers.IO) {
-                        val sid = ch.id.removePrefix("live_")
-                        val e = if (sid != ch.id) {
-                            try { EpgCache.get(x, sid) } catch (_: Exception) { null }
-                        } else null
+                        val e = try {
+                            EpgXml.lookupNow(ctx, session, ch)
+                        } catch (_: Exception) { null }
                         ch.id to e
                     }
                 }.awaitAll().forEach { (id, e) ->
@@ -101,6 +99,7 @@ fun TvTab(
                 }
             }
         } catch (_: Exception) { }
+        epgDone = true
     }
 
     fun open(ch: StalkerChannel, idx: Int) {
@@ -338,17 +337,18 @@ private fun EpgGuide(
 ) {
     val ctx = LocalContext.current
     var days by remember { mutableStateOf<Map<String, List<EpgEntry>>>(emptyMap()) }
+    val ctx = LocalContext.current
+    var guideDone by remember { mutableStateOf(false) }
     LaunchedEffect(list, session.sourceId) {
-        if (session.xServer.isBlank()) return@LaunchedEffect
+        guideDone = false
+        days = emptyMap()
         try {
-            val x = XtreamClient(session.xServer, session.xUser, session.xPass)
             coroutineScope {
                 list.take(12).map { ch ->
                     async(Dispatchers.IO) {
-                        val sid = ch.id.removePrefix("live_")
-                        val l = if (sid != ch.id) {
-                            try { EpgCache.getDay(x, sid) } catch (_: Exception) { emptyList() }
-                        } else emptyList<EpgEntry>()
+                        val l = try {
+                            EpgXml.lookupDay(ctx, session, ch)
+                        } catch (_: Exception) { emptyList() }
                         ch.id to l
                     }
                 }.awaitAll().forEach { (id, l) ->
@@ -356,6 +356,7 @@ private fun EpgGuide(
                 }
             }
         } catch (_: Exception) { }
+        guideDone = true
     }
 
     val now = System.currentTimeMillis() / 1000
@@ -413,7 +414,7 @@ private fun EpgGuide(
                         Box(Modifier.height(64.dp)) {
                             if (progs.isEmpty()) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
-                                    Text(if (session.xServer.isBlank()) "Program bilgisi yok" else "Yükleniyor...",
+                                    Text(if (!guideDone) "Yükleniyor..." else "Program bilgisi yok",
                                         color = PTx2, fontSize = 12.sp,
                                         modifier = Modifier.padding(start = 8.dp))
                                 }
