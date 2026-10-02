@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -585,6 +586,11 @@ fun GlassIconButton(icon: ImageVector, onClick: () -> Unit) {
 }
 
 // yukarida tanimli ikonlar material3'te farkli pakette olabilir; basit vektorler:
+@Composable
+fun MetaSmall(text: String) {
+    Text(text, color = PTx2, fontSize = 15.sp)
+}
+
 @Composable
 fun GlassTag(text: String) {
     Text(text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
