@@ -88,7 +88,6 @@ object PlayerBackend {
             .build()
     }
 
-    /** Hata aninda sunucunun gercek HTTP cevabini olc (tani icin). Or: "HTTP 403". */
     suspend fun probeStatus(url: String, headers: Map<String, String> = emptyMap()): String =
         withContext(Dispatchers.IO) {
             try {
@@ -102,11 +101,59 @@ object PlayerBackend {
                 "ulaşılamadı (${e.message?.take(60)})"
             }
         }
+
+    /**
+     * Detay sayfasindaki "Ses ve altyazi" tercihlerini ilk acilista uygula.
+     * audio: "auto" | dil kodu ("tr", "en"...); sub: "off" | "auto" | dil kodu.
+     */
+    fun applyTrackPrefs(exo: ExoPlayer, audioPref: String, subPref: String) {
+        try {
+            if (audioPref.isNotBlank() && audioPref != "auto") {
+                exo.currentTracks.groups.forEach { g ->
+                    if (g.type != C.TRACK_TYPE_AUDIO) return@forEach
+                    for (ti in 0 until g.length) {
+                        if (!g.isTrackSupported(ti)) continue
+                        val lang = g.getTrackFormat(ti).language ?: ""
+                        if (lang.startsWith(audioPref, ignoreCase = true)) {
+                            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                                .setOverrideForType(
+                                    TrackSelectionOverride(g.mediaTrackGroup, listOf(ti))
+                                ).build()
+                            return
+                        }
+                    }
+                }
+            }
+            when (subPref) {
+                "off" -> exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build()
+                "auto" -> { /* varsayilan */ }
+                else -> {
+                    exo.currentTracks.groups.forEach { g ->
+                        if (g.type != C.TRACK_TYPE_TEXT) return@forEach
+                        for (ti in 0 until g.length) {
+                            if (!g.isTrackSupported(ti)) continue
+                            val lang = g.getTrackFormat(ti).language ?: ""
+                            if (lang.startsWith(subPref, ignoreCase = true)) {
+                                exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                    .setOverrideForType(
+                                        TrackSelectionOverride(g.mediaTrackGroup, listOf(ti))
+                                    ).build()
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+    }
 }
 
 @Composable
-fun TrackDialog(exo: ExoPlayer, tick: Int, onClose: () -> Unit) {
-    key(tick) {
+fun TrackDialog(exo: ExoPlayer, tick: Int, onClose: () -> Unit) {    key(tick) {
         val audio = mutableListOf<TrackOpt>()
         val text = mutableListOf<TrackOpt>()
         exo.currentTracks.groups.forEachIndexed { gi, g ->
