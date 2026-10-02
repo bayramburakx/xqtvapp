@@ -47,7 +47,9 @@ data class SeriesEntry(
     val name: String,
     val cover: String,
     val category: String,
-    val episodes: List<EpisodeEntry> = emptyList()
+    val episodes: List<EpisodeEntry> = emptyList(),
+    val plot: String = "",
+    val cast: String = ""
 )
 
 data class VodDetail(
