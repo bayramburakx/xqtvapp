@@ -15,6 +15,7 @@ val KEY_AUTOPLAY = booleanPreferencesKey("autoplay_next")
 private val KEY_WATCHED = stringPreferencesKey("watched_v2")
 val KEY_PREF_AUDIO = stringPreferencesKey("pref_audio")
 val KEY_PREF_SUB = stringPreferencesKey("pref_sub")
+val KEY_PREF_SUBSIZE = stringPreferencesKey("pref_subsize")
 
 private const val FS = "\u001F"
 private const val RS = "\u001E"
@@ -193,5 +194,12 @@ object FavoritesStore {
             it[KEY_PREF_AUDIO] = audio
             it[KEY_PREF_SUB] = sub
         }
+    }
+
+    fun subSizeFlow(ctx: Context): Flow<Int> =
+        ctx.dataStore.data.map { it[KEY_PREF_SUBSIZE]?.toIntOrNull() ?: 1 }
+
+    suspend fun setSubSize(ctx: Context, idx: Int) {
+        ctx.dataStore.edit { it[KEY_PREF_SUBSIZE] = idx.toString() }
     }
 }
