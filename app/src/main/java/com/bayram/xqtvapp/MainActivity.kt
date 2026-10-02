@@ -79,6 +79,7 @@ import com.bayram.xqtvapp.ui.SectionHead
 import com.bayram.xqtvapp.ui.SeriesDetailScreen
 import com.bayram.xqtvapp.ui.SourceCard
 import com.bayram.xqtvapp.ui.SourcesScreen
+import com.bayram.xqtvapp.ui.TvTab
 import com.bayram.xqtvapp.ui.SplashScreen
 import com.bayram.xqtvapp.ui.clickableNoRipple
 import com.bayram.xqtvapp.ui.initialsOf
@@ -185,9 +186,17 @@ fun AppNav() {
         }
     }
 
-    fun openPlay(ch: StalkerChannel, url: String, alt: String?, headers: Map<String, String> = emptyMap()) {
+    fun openPlay(
+        ch: StalkerChannel, url: String, alt: String?,
+        headers: Map<String, String> = emptyMap(),
+        zap: List<StalkerChannel> = emptyList(), zapIdx: Int = -1
+    ) {
         scope.launch { FavoritesStore.pushRecent(ctx, ch, kind = "live") }
-        play = PlayReq(ch.name, url, alt, isLive = true, resumeId = ch.id, headers = headers)
+        val s = session
+        play = PlayReq(ch.name, url, alt, isLive = true, resumeId = ch.id, headers = headers,
+            zap = zap, zapIndex = zapIdx,
+            xServer = s?.xServer ?: "", xUser = s?.xUser ?: "", xPass = s?.xPass ?: "",
+            stalkerUrl = s?.stalkerUrl ?: "", stalkerMac = s?.stalkerMac ?: "")
     }
 
     fun openMoviePlay(movie: StalkerChannel, url: String, startMs: Long = 0L, headers: Map<String, String> = emptyMap()) {
@@ -323,7 +332,7 @@ fun AppNav() {
         searchOpen && session != null -> SearchScreen(
             session = session!!,
             onClose = { searchOpen = false },
-            onPlayChannel = { ch, url, alt, h -> searchOpen = false; openPlay(ch, url, alt, h) },
+            onPlayChannel = { ch, url, alt, h, z, zi -> searchOpen = false; openPlay(ch, url, alt, h, z, zi) },
             onOpenMovie = { searchOpen = false; movieDetail = it },
             onOpenSeries = { searchOpen = false; seriesDetail = it }
         )
