@@ -343,8 +343,8 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                                     delay(300)
                                     if (locked) {
                                         showUi = true; uiTick++
-                                    } else if (playing) {
-                                        showUi = false
+                                    } else if (showUi) {
+                                        if (playing) showUi = false
                                     } else {
                                         poke()
                                     }
