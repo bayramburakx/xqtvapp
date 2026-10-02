@@ -142,7 +142,14 @@ data class PlayReq(
     val isLive: Boolean = false,
     val startMs: Long = 0L,
     val resumeId: String = "",
-    val headers: Map<String, String> = emptyMap()
+    val headers: Map<String, String> = emptyMap(),
+    val zap: List<StalkerChannel> = emptyList(),
+    val zapIndex: Int = -1,
+    val xServer: String = "",
+    val xUser: String = "",
+    val xPass: String = "",
+    val stalkerUrl: String = "",
+    val stalkerMac: String = ""
 )
 
 private sealed interface Root {
@@ -290,7 +297,7 @@ fun AppNav() {
                             root = Root.Sources
                         }
                     },
-                    onPlayChannel = { ch, url, alt, h -> openPlay(ch, url, alt, h) },
+                    onPlayChannel = { ch, url, alt, h, z, zi -> openPlay(ch, url, alt, h, z, zi) },
                     onOpenMovie = { movieDetail = it },
                     onOpenSeries = { seriesDetail = it }
                 )
@@ -340,7 +347,7 @@ fun HomeScreen(
     onSearch: () -> Unit,
     onRefresh: () -> Unit,
     onLogout: () -> Unit,
-    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
+    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
@@ -359,7 +366,7 @@ fun HomeScreen(
     Box(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         when (tab) {
             MainTab.HOME -> DiscoverTab(session, onSourceSwitch, onSearch, onPlayChannel, onOpenMovie, onOpenSeries)
-            MainTab.TV -> TvTab(session, onPlayChannel)
+            MainTab.TV -> TvTab(session, onSearch, onPlayChannel)
             MainTab.MOVIES -> MovieTab(session, onSearch, onOpenMovie)
             MainTab.SERIES -> SeriesTab(session, onSearch, onOpenSeries)
             MainTab.SETTINGS -> SettingsTab(session, onRefresh, onSourceSwitch, onLogout)
@@ -431,7 +438,7 @@ fun DiscoverTab(
     session: Session,
     onSourceSwitch: () -> Unit,
     onSearch: () -> Unit,
-    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
+    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
@@ -451,12 +458,14 @@ fun DiscoverTab(
                 if (session.stalkerUrl.isNotEmpty()) {
                     val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
                     val url = sc.createLink(ch.cmd)
-                    if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
+                    if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders(),
+                        session.channels, session.channels.indexOfFirst { it.id == ch.id })
                 } else {
                     val headers = if (session.xServer.isNotBlank())
                         mapOf("Referer" to session.xServer.trimEnd('/') + "/") else emptyMap()
                     val alt = if (ch.cmd.endsWith(".m3u8")) ch.cmd.dropLast(5) + ".ts" else null
-                    onPlayChannel(ch, ch.cmd, alt, headers)
+                    onPlayChannel(ch, ch.cmd, alt, headers,
+                        session.channels, session.channels.indexOfFirst { it.id == ch.id })
                 }
             } finally { busy = null }
         }
@@ -950,54 +959,6 @@ fun ChannelCard(ch: StalkerChannel, busy: Boolean, isFav: Boolean, onFav: () -> 
 
 // ==================== SEKMELER ====================
 
-@Composable
-fun TvTab(session: Session, onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var cat by remember { mutableStateOf("Tümü") }
-    var q by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf<String?>(null) }
-
-    val cats = remember(session) { listOf("Tümü") + session.channels.map { it.genre }.distinct().sorted() }
-    val list = session.channels.filter {
-        (cat == "Tümü" || it.genre == cat) && (q.isBlank() || it.name.contains(q, true))
-    }
-
-    fun open(ch: StalkerChannel) {
-        scope.launch {
-            busy = ch.id
-            try {
-                if (session.stalkerUrl.isNotEmpty()) {
-                    val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
-                    val url = sc.createLink(ch.cmd)
-                    if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
-                } else {
-                    val headers = if (session.xServer.isNotBlank())
-                        mapOf("Referer" to session.xServer.trimEnd('/') + "/") else emptyMap()
-                    val alt = if (ch.cmd.endsWith(".m3u8")) ch.cmd.dropLast(5) + ".ts" else null
-                    onPlayChannel(ch, ch.cmd, alt, headers)
-                }
-            } finally { busy = null }
-        }
-    }
-
-    Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
-        SectionHead("Canlı TV", list.size)
-        OutlinedTextField(q, { q = it }, label = { Text("Kanal ara...") },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-            shape = RoundedCornerShape(14.dp))
-        CatChips(cats, cat) { cat = it }
-        LazyVerticalGrid(columns = GridCells.Adaptive(160.dp),
-            contentPadding = PaddingValues(20.dp, 8.dp, 20.dp, 110.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f)) {
-            items(list, key = { it.id }) { ch ->
-                ChannelCard(ch, busy == ch.id, false, {}, { open(ch) })
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MovieTab(session: Session, onSearch: () -> Unit, onOpenMovie: (StalkerChannel) -> Unit) {
@@ -1343,7 +1304,7 @@ private fun SettingsRow(
 fun SearchScreen(
     session: Session,
     onClose: () -> Unit,
-    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>) -> Unit,
+    onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
@@ -1361,13 +1322,15 @@ fun SearchScreen(
                 if (session.stalkerUrl.isNotEmpty()) {
                     val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
                     val url = sc.createLink(ch.cmd)
-                    if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders())
+                    if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders(),
+                        session.channels, session.channels.indexOfFirst { it.id == ch.id })
                 } else {
                     val headers = if (session.xServer.isNotBlank())
                         mapOf("Referer" to session.xServer.trimEnd('/') + "/") else emptyMap()
                     val url = ch.cmd
                     val alt = if (url.endsWith(".m3u8")) url.dropLast(5) + ".ts" else null
-                    if (url.isNotBlank()) onPlayChannel(ch, url, alt, headers)
+                    if (url.isNotBlank()) onPlayChannel(ch, url, alt, headers,
+                        session.channels, session.channels.indexOfFirst { it.id == ch.id })
                 }
             } finally { busy = null }
         }
