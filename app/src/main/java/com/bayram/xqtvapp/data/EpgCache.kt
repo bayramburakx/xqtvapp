@@ -26,7 +26,9 @@ data class EpgEntry(
 object EpgCache {
     private const val TTL_MS = 30L * 60 * 1000
     private data class Row(val at: Long, val epg: EpgEntry?)
+    private data class RowList(val at: Long, val list: List<EpgEntry>)
     private val mem = LinkedHashMap<String, Row>()
+    private val memList = LinkedHashMap<String, RowList>()
     private const val MAX = 200
 
     suspend fun get(client: XtreamClient, streamId: String): EpgEntry? {
@@ -42,5 +44,21 @@ object EpgCache {
             mem[streamId] = Row(now, epg)
         }
         return epg
+    }
+
+    /** Rehber icin gunluk akis. */
+    suspend fun getDay(client: XtreamClient, streamId: String): List<EpgEntry> {
+        val now = System.currentTimeMillis()
+        synchronized(memList) {
+            memList[streamId]?.let { if (now - it.at < TTL_MS) return it.list }
+        }
+        val list = try {
+            client.dayEpg(streamId).map { EpgEntry(it.title, it.startEpoch, it.endEpoch) }
+        } catch (_: Exception) { emptyList() }
+        synchronized(memList) {
+            if (memList.size > MAX) memList.remove(memList.keys.first())
+            memList[streamId] = RowList(now, list)
+        }
+        return list
     }
 }
