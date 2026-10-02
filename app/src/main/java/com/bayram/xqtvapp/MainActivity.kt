@@ -531,7 +531,7 @@ fun DiscoverTab(
             }
         }
 
-        item { Spacer(Modifier.height(10.dp)) }
+        item { Spacer(Modifier.height(18.dp)) }
         if (session.channels.isNotEmpty()) {
             item {
                 SectionHead("Şimdi canlı", session.channels.size, "Rehber", onAction = {})
@@ -539,7 +539,7 @@ fun DiscoverTab(
             }
         }
 
-        item { Spacer(Modifier.height(10.dp)) }
+        item { Spacer(Modifier.height(18.dp)) }
         if (session.movies.isNotEmpty()) {
             item {
                 SectionHead("Yeni filmler", session.movies.size, "Tümü", onAction = {})
@@ -552,7 +552,7 @@ fun DiscoverTab(
             }
         }
 
-        item { Spacer(Modifier.height(10.dp)) }
+        item { Spacer(Modifier.height(18.dp)) }
         if (session.series.isNotEmpty()) {
             item {
                 SectionHead("Popüler diziler", session.series.size, "Tümü", onAction = {})
@@ -663,7 +663,7 @@ private fun HeroSlider(
                         Text(s.badge, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(Modifier.height(12.dp))
-                    Text(s.title, fontSize = 44.sp, lineHeight = 44.sp,
+                    Text(s.title, fontSize = 32.sp, lineHeight = 34.sp,
                         fontWeight = FontWeight.ExtraBold, color = Color.White,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(10.dp))
@@ -1040,7 +1040,9 @@ fun MovieTab(session: Session, onSearch: (String) -> Unit, onOpenMovie: (Stalker
                         SectionHead("Yeni eklenenler", 0)
                         RailRow {
                             list.take(8).forEach { m ->
-                                PosterCard128(m.name, m.logo) { onOpenMovie(m) }
+                                Box(Modifier.width(128.dp)) {
+                                    GridPosterCell(m.name, m.logo) { onOpenMovie(m) }
+                                }
                             }
                         }
                         SectionHead(if (cat == "Tümü") "Tüm filmler" else cat, list.size)
@@ -1130,7 +1132,9 @@ fun SeriesTab(session: Session, onSearch: (String) -> Unit, onOpenSeries: (Serie
                         SectionHead("Yeni bölümler", 0)
                         RailRow {
                             list.take(8).forEach { s ->
-                                PosterCard128(s.name, s.cover) { onOpenSeries(s) }
+                                Box(Modifier.width(128.dp)) {
+                                    GridPosterCell(s.name, s.cover) { onOpenSeries(s) }
+                                }
                             }
                         }
                         SectionHead("Tüm diziler", list.size)
