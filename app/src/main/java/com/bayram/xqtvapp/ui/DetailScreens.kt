@@ -63,11 +63,10 @@ fun MovieDetailScreen(
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
     val liked by FavoritesStore.watchedFlow(ctx).collectAsState(initial = emptySet())
     val resume by FavoritesStore.entryFlow(ctx, movie.id).collectAsState(initial = null)
-    val prefs by FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off"))
     var detail by remember { mutableStateOf<VodDetail?>(null) }
     var busy by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
-    var sheet by remember { mutableStateOf(false) }
+    val prefs by FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off"))
     val listState = rememberLazyListState()
     val showMini by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
 
@@ -207,18 +206,6 @@ fun MovieDetailScreen(
                                 fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
-                    OutlinedButton(
-                        onClick = { sheet = true },
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(containerColor = PGlass)
-                    ) {
-                        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-                            Text("Ses ve altyazı", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                            Text(avSummary(prefs.first, prefs.second), color = PTx2, fontSize = 13.sp)
-                        }
-                        Text("›", color = PTx2, fontSize = 22.sp)
-                    }
                     if (cast.isNotEmpty()) {
                         Spacer(Modifier.height(30.dp))
                         Text("Oyuncular", fontWeight = FontWeight.Bold, fontSize = 21.sp)
@@ -272,16 +259,6 @@ fun MovieDetailScreen(
             MiniBar(title = movie.name, onBack = onBack,
                 onPlay = { playNow(if (resume?.hasValid() == true) resume!!.posMs else 0L) })
         }
-
-        if (sheet) {
-            AvSheet(
-                audio = prefs.first, sub = prefs.second,
-                onPick = { a, s ->
-                    scope.launch { FavoritesStore.setTrackPrefs(ctx, a, s) }
-                },
-                onClose = { sheet = false }
-            )
-        }
     }
 }
 
@@ -308,6 +285,7 @@ fun SeriesDetailScreen(
     entry: SeriesEntry,
     session: Session,
     onBack: () -> Unit,
+    onSelect: (SeriesEntry) -> Unit,
     onPlayEpisode: (String, String, List<EpisodeEntry>, Int, Long) -> Unit
 ) {
     val ctx = LocalContext.current
@@ -316,12 +294,10 @@ fun SeriesDetailScreen(
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
     val liked by FavoritesStore.watchedFlow(ctx).collectAsState(initial = emptySet())
     val watched by FavoritesStore.watchedFlow(ctx).collectAsState(initial = emptySet())
-    val prefs by FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off"))
     var full by remember { mutableStateOf<SeriesEntry?>(if (entry.episodes.isNotEmpty()) entry else null) }
     var season by remember { mutableIntStateOf(-1) }
     var loading by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
-    var sheet by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val showMini by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
 
@@ -456,19 +432,7 @@ fun SeriesDetailScreen(
                                 fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
-                    OutlinedButton(
-                        onClick = { sheet = true },
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(containerColor = PGlass)
-                    ) {
-                        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-                            Text("Ses ve altyazı", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                            Text(avSummary(prefs.first, prefs.second), color = PTx2, fontSize = 13.sp)
-                        }
-                        Text("›", color = PTx2, fontSize = 22.sp)
-                    }
-                    Spacer(Modifier.height(30.dp))
+                    Spacer(Modifier.height(16.dp))
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text("Bölümler", fontWeight = FontWeight.Bold, fontSize = 21.sp,
                             modifier = Modifier.weight(1f))
@@ -490,6 +454,13 @@ fun SeriesDetailScreen(
                     Spacer(Modifier.height(4.dp))
                 }
             }
+            val seriesCast = remember(full) {
+                (full?.cast ?: "").split(",").map { it.trim() }.filter { it.isNotEmpty() }.take(10)
+            }
+            val similarSeries = remember(entry.id, session) {
+                session.series.filter { it.id != entry.id && it.category == entry.category }.take(8)
+                    .ifEmpty { session.series.filter { it.id != entry.id }.take(8) }
+            }
             items(eps, key = { it.id }) { ep ->
                 val idx = allEps.indexOfFirst { it.id == ep.id }
                 val wid = "series_" + ep.id
@@ -497,9 +468,15 @@ fun SeriesDetailScreen(
                 val ri = resumeEp?.id == ep.id
                 val prog = if (ri && resumeInfo != null && resumeInfo.durMs > 0)
                     resumeInfo.posMs.toFloat() / resumeInfo.durMs else 0f
-                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().height(112.dp)
+                        .padding(horizontal = 20.dp, vertical = 5.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF15151F))
+                ) {
+                Row(Modifier.fillMaxSize().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(
-                        Modifier.width(136.dp).height(77.dp)
+                        Modifier.width(128.dp).height(72.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .background(tileBrush(ep.id))
                             .clickableNoRipple {
@@ -551,7 +528,58 @@ fun SeriesDetailScreen(
                             modifier = Modifier.size(15.dp))
                     }
                 }
-                HorizontalDivider(color = PLine, modifier = Modifier.padding(horizontal = 20.dp))
+                }
+            }
+            item {
+                Column(Modifier.padding(horizontal = 20.dp)) {
+                    if (seriesCast.isNotEmpty()) {
+                        Spacer(Modifier.height(26.dp))
+                        Text("Oyuncular", fontWeight = FontWeight.Bold, fontSize = 21.sp)
+                        Spacer(Modifier.height(12.dp))
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            items(seriesCast, key = { it }) { name ->
+                                Column(Modifier.width(76.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Box(Modifier.size(76.dp).clip(CircleShape)
+                                        .background(tileBrush(name)),
+                                        contentAlignment = Alignment.Center) {
+                                        Text(initialsOf(name), color = Color.White,
+                                            fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(name, fontSize = 13.sp, maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(26.dp))
+                    Text("Bilgiler", fontWeight = FontWeight.Bold, fontSize = 21.sp)
+                    Spacer(Modifier.height(4.dp))
+                    InfoTable(
+                        listOfNotNull(
+                            "Kategori" to entry.category,
+                            "${seasons.size} sezon" to "${allEps.size} bölüm",
+                            "Kaynak" to session.sourceName.ifBlank { session.label }
+                        )
+                    )
+                    if (similarSeries.isNotEmpty()) {
+                        Spacer(Modifier.height(26.dp))
+                        Text("Benzer diziler", fontWeight = FontWeight.Bold, fontSize = 21.sp)
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+            }
+            if (similarSeries.isNotEmpty()) {
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(similarSeries, key = { it.id }) { s ->
+                            PosterCard128(s.name, s.cover) { onSelect(s) }
+                        }
+                    }
+                }
+            }
             }
             item { Spacer(Modifier.height(50.dp)) }
         }
@@ -561,14 +589,6 @@ fun SeriesDetailScreen(
                 val idx = if (nextIdx >= 0) nextIdx else 0
                 if (allEps.isNotEmpty()) onPlayEpisode(entry.name, entry.cover, allEps, idx, 0L)
             })
-        }
-
-        if (sheet) {
-            AvSheet(
-                audio = prefs.first, sub = prefs.second,
-                onPick = { a, s -> scope.launch { FavoritesStore.setTrackPrefs(ctx, a, s) } },
-                onClose = { sheet = false }
-            )
         }
     }
 }
