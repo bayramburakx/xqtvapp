@@ -37,7 +37,9 @@ data class EpisodeEntry(
     val episode: Int,
     val title: String,
     val url: String,
-    val cover: String
+    val cover: String,
+    val plot: String = "",
+    val durationSecs: Long = 0L
 )
 
 data class SeriesEntry(
