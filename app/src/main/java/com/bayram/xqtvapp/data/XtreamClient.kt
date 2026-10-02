@@ -67,6 +67,63 @@ class XtreamClient(
         }
     }
 
+    /**
+     * Buyuk listeler icin akan (streaming) JSON okuma: tum cevabi agacta
+     * tutmak yerine obje obje okur. 20-30 bin kayitli panellerde OOM'u onler.
+     */
+    private suspend fun getArrayStream(path: String): List<Map<String, String>> =
+        withContext(Dispatchers.IO) {
+            try {
+                val req = Request.Builder()
+                    .url("$server/$path")
+                    .header("User-Agent", "XqTvApp/1.0")
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    val body = resp.body ?: return@withContext emptyList<Map<String, String>>()
+                    val reader = android.util.JsonReader(body.byteStream().bufferedReader())
+                    try {
+                        reader.beginArray()
+                        val out = mutableListOf<Map<String, String>>()
+                        while (reader.hasNext()) {
+                            val map = mutableMapOf<String, String>()
+                            try {
+                                reader.beginObject()
+                                while (reader.hasNext()) {
+                                    val name = try {
+                                        reader.nextName()
+                                    } catch (_: Exception) {
+                                        try { reader.skipValue() } catch (_: Exception) { }
+                                        continue
+                                    }
+                                    try {
+                                        when (reader.peek()) {
+                                            android.util.JsonToken.STRING ->
+                                                map[name] = reader.nextString()
+                                            android.util.JsonToken.NUMBER ->
+                                                map[name] = reader.nextDouble().toLong().toString()
+                                            android.util.JsonToken.BOOLEAN ->
+                                                map[name] = reader.nextBoolean().toString()
+                                            else -> reader.skipValue()
+                                        }
+                                    } catch (_: Exception) {
+                                        try { reader.skipValue() } catch (_: Exception) { }
+                                    }
+                                }
+                                reader.endObject()
+                            } catch (_: Exception) { }
+                            if (map.isNotEmpty()) out.add(map)
+                        }
+                        out
+                    } finally {
+                        try { reader.close() } catch (_: Exception) { }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("Xtream", "stream fail", e)
+                emptyList()
+            }
+        }
+
     private fun u() = "username=${URLEncoder.encode(username, "UTF-8")}&password=${URLEncoder.encode(password, "UTF-8")}"
 
     suspend fun login(): Boolean {
@@ -86,11 +143,12 @@ class XtreamClient(
     }
 
     private suspend fun categories(action: String): Map<String, String> {
-        val arr = getArray("player_api.php?${u()}&action=$action")
+        val arr = getArrayStream("player_api.php?${u()}&action=$action")
         val map = mutableMapOf<String, String>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            map[o.optString("category_id")] = o.optString("category_name", "General")
+        for (o in arr) {
+            val id = o["category_id"] ?: continue
+            if (id.isEmpty()) continue
+            map[id] = o["category_name"]?.takeIf { it.isNotEmpty() } ?: "General"
         }
         return map
     }
@@ -100,15 +158,14 @@ class XtreamClient(
 
     suspend fun liveStreams(): List<StalkerChannel> {
         val cats = liveCategories()
-        val arr = getArray("player_api.php?${u()}&action=get_live_streams")
+        val arr = getArrayStream("player_api.php?${u()}&action=get_live_streams")
         val out = mutableListOf<StalkerChannel>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val id = o.optString("stream_id")
+        for (o in arr) {
+            val id = o["stream_id"] ?: continue
             if (id.isEmpty()) continue
-            val name = o.optString("name", "CH $id")
-            val logo = o.optString("stream_icon", "")
-            val cat = cats[o.optString("category_id")] ?: "General"
+            val name = o["name"]?.takeIf { it.isNotEmpty() } ?: "CH $id"
+            val logo = o["stream_icon"] ?: ""
+            val cat = cats[o["category_id"]] ?: "General"
             val url = "$server/live/$username/$password/$id.m3u8"
             out.add(StalkerChannel("live_$id", name, logo, url, cat))
         }
@@ -117,16 +174,15 @@ class XtreamClient(
 
     suspend fun vodStreams(): List<StalkerChannel> {
         val cats = vodCategories()
-        val arr = getArray("player_api.php?${u()}&action=get_vod_streams")
+        val arr = getArrayStream("player_api.php?${u()}&action=get_vod_streams")
         val out = mutableListOf<StalkerChannel>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val id = o.optString("stream_id")
+        for (o in arr) {
+            val id = o["stream_id"] ?: continue
             if (id.isEmpty()) continue
-            val name = o.optString("name", "VOD $id")
-            val logo = o.optString("stream_icon", "")
-            val cat = cats[o.optString("category_id")] ?: "Movies"
-            val ext = o.optString("container_extension", "mp4")
+            val name = o["name"]?.takeIf { it.isNotEmpty() } ?: "VOD $id"
+            val logo = o["stream_icon"] ?: ""
+            val cat = cats[o["category_id"]] ?: "Movies"
+            val ext = o["container_extension"]?.takeIf { it.isNotEmpty() } ?: "mp4"
             val url = "$server/movie/$username/$password/$id.$ext"
             out.add(StalkerChannel("vod_$id", name, logo, url, cat))
         }
@@ -137,18 +193,17 @@ class XtreamClient(
 
     suspend fun seriesList(): List<SeriesEntry> {
         val cats = seriesCategories()
-        val arr = getArray("player_api.php?${u()}&action=get_series")
+        val arr = getArrayStream("player_api.php?${u()}&action=get_series")
         val out = mutableListOf<SeriesEntry>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val id = o.optString("series_id")
+        for (o in arr) {
+            val id = o["series_id"] ?: continue
             if (id.isEmpty()) continue
             out.add(
                 SeriesEntry(
                     id = id,
-                    name = o.optString("name", "Series $id"),
-                    cover = o.optString("cover", ""),
-                    category = cats[o.optString("category_id")] ?: "Series"
+                    name = o["name"]?.takeIf { it.isNotEmpty() } ?: "Series $id",
+                    cover = o["cover"] ?: "",
+                    category = cats[o["category_id"]] ?: "Series"
                 )
             )
         }
