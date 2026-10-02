@@ -16,12 +16,19 @@ class StalkerClient(
     private var portalUrl: String,
     private var mac: String
 ) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+    companion object {
+        private val sharedClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .connectionPool(okhttp3.ConnectionPool(8, 5, TimeUnit.MINUTES))
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
+    }
+    private val client: OkHttpClient get() = sharedClient
 
     private var token: String = ""
     var lastError: String = ""

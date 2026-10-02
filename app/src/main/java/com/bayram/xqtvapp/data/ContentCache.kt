@@ -24,22 +24,29 @@ object ContentCache {
     private fun file(ctx: Context, key: String): File =
         File(ctx.filesDir, "portio_cache_$key.json")
 
-    fun load(ctx: Context, key: String): CachedPayload? {
-        return try {
-            val f = file(ctx, key)
-            if (!f.exists()) return null
-            gson.fromJson(f.readText(), CachedPayload::class.java)
-        } catch (_: Exception) { null }
-    }
+    suspend fun load(ctx: Context, key: String): CachedPayload? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val f = file(ctx, key)
+                if (!f.exists()) return@withContext null
+                gson.fromJson(f.readText(), CachedPayload::class.java)
+            } catch (_: Exception) { null }
+        }
 
-    fun save(ctx: Context, key: String, payload: CachedPayload) {
+    suspend fun save(ctx: Context, key: String, payload: CachedPayload) {
         try {
-            file(ctx, key).writeText(gson.toJson(payload))
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                file(ctx, key).writeText(gson.toJson(payload))
+            }
         } catch (_: Exception) { }
     }
 
-    fun clear(ctx: Context, key: String) {
-        try { file(ctx, key).delete() } catch (_: Exception) { }
+    suspend fun clear(ctx: Context, key: String) {
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                file(ctx, key).delete()
+            }
+        } catch (_: Exception) { }
     }
 
     fun isFresh(p: CachedPayload?): Boolean =

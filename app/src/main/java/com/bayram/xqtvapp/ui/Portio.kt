@@ -70,9 +70,9 @@ fun ProgressLine(progress: Float, color: Color = Color.White, modifier: Modifier
 
 /** Bolum basligi + sag link. */
 @Composable
-fun SectionHead(title: String, count: Int = 0, action: String? = null, onAction: (() -> Unit)? = null) {
+fun SectionHead(title: String, count: Int = 0, action: String? = null, hPad: androidx.compose.ui.unit.Dp = 20.dp, onAction: (() -> Unit)? = null) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+        Modifier.fillMaxWidth().padding(horizontal = hPad, vertical = 6.dp),
         verticalAlignment = Alignment.Bottom
     ) {
         Text(title, fontWeight = FontWeight.Bold, fontSize = 21.sp,

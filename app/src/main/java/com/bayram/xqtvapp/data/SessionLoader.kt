@@ -11,6 +11,8 @@ import com.bayram.xqtvapp.KEY_X_SERVER
 import com.bayram.xqtvapp.KEY_X_USER
 import com.bayram.xqtvapp.Session
 import com.bayram.xqtvapp.dataStore
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 
 val KEY_LAST = stringPreferencesKey("last_source")
@@ -62,15 +64,19 @@ suspend fun loadSource(
             Session(src.name, ch, vod, emptyList(), src.url.trim(), src.user.trim(),
                 sourceId = src.id, sourceName = src.name)
         }
-        "xtream" -> {
+        "xtream" -> coroutineScope {
             val x = XtreamClient(src.url.trim(), src.user.trim(), src.pass.trim())
             if (!x.login()) throw Exception(x.lastError.ifBlank { "giriş başarısız" })
             onStep("connect", 0, 0, 0)
-            val ch = x.liveStreams()
+            // canli + film + dizi paralel cekilir: buyuk panellerde 3x hizli acilis
+            val chDef = async { x.liveStreams() }
+            val mvDef = async { x.vodStreams() }
+            val srDef = async { x.seriesList() }
+            val ch = try { chDef.await() } catch (_: Exception) { emptyList() }
             onStep("channels", ch.size, 0, 0)
-            val movies = x.vodStreams()
+            val movies = try { mvDef.await() } catch (_: Exception) { emptyList() }
             onStep("movies", ch.size, movies.size, 0)
-            val series = x.seriesList()
+            val series = try { srDef.await() } catch (_: Exception) { emptyList() }
             onStep("series", ch.size, movies.size, series.size)
             if (ch.isEmpty() && movies.isEmpty() && series.isEmpty()) throw Exception("Giriş ok ama içerik boş")
             Session("Xtream (${src.user.trim()})", ch, movies, series,

@@ -7,11 +7,15 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 object M3uParser {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
+    private val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .connectionPool(okhttp3.ConnectionPool(6, 5, TimeUnit.MINUTES))
+            .followRedirects(true)
+            .retryOnConnectionFailure(true)
+            .build()
+    }
 
     suspend fun download(url: String): String = withContext(Dispatchers.IO) {
         val req = Request.Builder().url(url).header("User-Agent", "XqTvApp/1.0").build()

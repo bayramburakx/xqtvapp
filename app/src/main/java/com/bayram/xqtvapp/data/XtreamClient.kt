@@ -16,11 +16,19 @@ class XtreamClient(
     private val password: String
 ) {
     private val server = serverUrl.trim().trimEnd('/')
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
+
+    companion object {
+        private val sharedClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .connectionPool(okhttp3.ConnectionPool(8, 5, TimeUnit.MINUTES))
+                .followRedirects(true)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
+    }
+    private val client: OkHttpClient get() = sharedClient
 
     var lastError: String = ""
         private set
@@ -276,8 +284,17 @@ class XtreamClient(
         return list.firstOrNull { it.startEpoch <= now && now < it.endEpoch }
     }
 
-    /** Gunluk akis listesi (rehber gorunumu icin). */
+    /** Gunluk akis listesi (rehber gorunumu icin).
+     *  Once get_simple_data_table denenir (varsa en hizlisi),
+     *  bos donerse get_short_epg yedegine dusulur. Kaynakta yoksa
+     *  bos doner; EpgXml internet yedegini devreye sokar. */
     suspend fun dayEpg(streamId: String): List<EpgNow> {
+        val first = simpleTable(streamId)
+        if (first.isNotEmpty()) return first
+        return shortEpg(streamId)
+    }
+
+    private suspend fun simpleTable(streamId: String): List<EpgNow> {
         val arr = getArray(
             "player_api.php?${u()}&action=get_simple_data_table&stream_id=$streamId"
         )
@@ -295,6 +312,62 @@ class XtreamClient(
             }
         }
         return out.sortedBy { it.startEpoch }
+    }
+
+    /** Yedek EPG ucu: get_short_epg -> {"epg_listings":[{title,start,end,description}]}.
+     *  Bazi panellerde start/end "2024-.. ..:..:.." ya da epoch string gelir. */
+    private suspend fun shortEpg(streamId: String): List<EpgNow> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("$server/player_api.php?${u()}&action=get_short_epg&stream_id=$streamId")
+                .header("User-Agent", "XqTvApp/1.0")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: return@withContext emptyList()
+                val root = try { JSONObject(text.trimStart()) } catch (_: Exception) { return@withContext emptyList<EpgNow>() }
+                val arr = root.optJSONArray("epg_listings") ?: return@withContext emptyList<EpgNow>()
+                val out = mutableListOf<EpgNow>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val start = parseEpgTs(o.optString("start", o.optString("start_timestamp", "")))
+                    val end = parseEpgTs(o.optString("end", o.optString("stop_timestamp",
+                        o.optString("stop", o.optString("end_timestamp", "")))))
+                    // short_epg bazen stop yerine start+duration verir
+                    val stop2 = if (end <= start) {
+                        val dur = o.optString("duration", "").toLongOrNull() ?: 0L
+                        if (dur > 0) start + dur else 0L
+                    } else end
+                    val title = o.optString("title", o.optString("name", ""))
+                        .ifBlank { "Program" }
+                    if (start > 0 && stop2 > start) {
+                        out.add(EpgNow(title, start, stop2,
+                            o.optString("description", o.optString("desc", ""))))
+                    }
+                }
+                out.sortedBy { it.startEpoch }
+            }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun parseEpgTs(raw: String): Long {
+        val s = raw.trim()
+        if (s.isEmpty()) return 0L
+        s.toLongOrNull()?.let { v ->
+            // ms gelirse sn'ye indir
+            return if (v > 41024448000L) v / 1000 else v
+        }
+        return try {
+            val fmts = listOf("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss")
+            for (f in fmts) {
+                try {
+                    val dt = java.text.SimpleDateFormat(f, java.util.Locale.US)
+                    dt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                    val t = dt.parse(s)?.time?.div(1000) ?: 0L
+                    if (t > 0) return t
+                } catch (_: Exception) { }
+            }
+            0L
+        } catch (_: Exception) { 0L }
     }
 }
 

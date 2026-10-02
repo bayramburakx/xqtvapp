@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -81,19 +82,24 @@ fun TvTab(
     }
 
     // gorunur kanallarin su anki yayini (kaynak + internet XMLTV yedegi)
+    // Semaphore(6): 40 paralel istek saglayiciyi bogmasin, stabil kalsin
     var nowMap by remember { mutableStateOf<Map<String, EpgEntry?>>(emptyMap()) }
     var epgDone by remember { mutableStateOf(false) }
     LaunchedEffect(list, session.sourceId) {
         epgDone = false
         nowMap = emptyMap()
         try {
+            val sem = kotlinx.coroutines.sync.Semaphore(6)
             coroutineScope {
-                list.take(40).map { ch ->
+                list.take(25).map { ch ->
                     async(Dispatchers.IO) {
-                        val e = try {
-                            EpgXml.lookupNow(ctx, session, ch)
-                        } catch (_: Exception) { null }
-                        ch.id to e
+                        sem.acquire()
+                        try {
+                            val e = try {
+                                EpgXml.lookupNow(ctx, session, ch)
+                            } catch (_: Exception) { null }
+                            ch.id to e
+                        } finally { sem.release() }
                     }
                 }.awaitAll().forEach { (id, e) ->
                     if (e != null) nowMap = nowMap + (id to e)
@@ -175,8 +181,7 @@ fun TvTab(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    items(list, key = { it.id }) { ch ->
-                        val idx = list.indexOfFirst { it.id == ch.id }
+                    itemsIndexed(list, key = { _, it -> it.id }) { idx, ch ->
                         LiveRow(
                             ch = ch,
                             number = idx + 1,
@@ -343,13 +348,17 @@ private fun EpgGuide(
         guideDone = false
         days = emptyMap()
         try {
+            val sem = kotlinx.coroutines.sync.Semaphore(5)
             coroutineScope {
                 list.take(12).map { ch ->
                     async(Dispatchers.IO) {
-                        val l = try {
-                            EpgXml.lookupDay(ctx, session, ch)
-                        } catch (_: Exception) { emptyList() }
-                        ch.id to l
+                        sem.acquire()
+                        try {
+                            val l = try {
+                                EpgXml.lookupDay(ctx, session, ch)
+                            } catch (_: Exception) { emptyList() }
+                            ch.id to l
+                        } finally { sem.release() }
                     }
                 }.awaitAll().forEach { (id, l) ->
                     if (l.isNotEmpty()) days = days + (id to l)

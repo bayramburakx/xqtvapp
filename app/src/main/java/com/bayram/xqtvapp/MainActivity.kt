@@ -179,12 +179,17 @@ fun AppNav() {
     var toastMsg by remember { mutableStateOf<String?>(null) }
 
     suspend fun reloadSources() {
-        val list = SourceStore.flow(ctx).first()
+        // Disk IO: ana threadi kilitlememek icin IO'ya tasinir (sayfa gecis kasmalarini onler)
+        val list = kotlinx.coroutines.withContext(Dispatchers.IO) {
+            SourceStore.flow(ctx).first()
+        }
         sources = list
-        lastId = SourceStore.lastId(ctx)
-        counts = list.associate { s ->
-            val c = ContentCache.load(ctx, s.cacheKey())
-            s.cacheKey() to Triple(c?.channels?.size ?: 0, c?.movies?.size ?: 0, c?.series?.size ?: 0)
+        lastId = kotlinx.coroutines.withContext(Dispatchers.IO) { SourceStore.lastId(ctx) }
+        counts = kotlinx.coroutines.withContext(Dispatchers.IO) {
+            list.associate { s ->
+                val c = ContentCache.load(ctx, s.cacheKey())
+                s.cacheKey() to Triple(c?.channels?.size ?: 0, c?.movies?.size ?: 0, c?.series?.size ?: 0)
+            }
         }
     }
 
@@ -364,7 +369,12 @@ fun HomeScreen(
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
-    var tab by remember { mutableStateOf(MainTab.HOME) }
+    // rememberSaveable: dondurmede sekme korunur; SaveableStateHolder: sekmeler arasi
+    // geciste scroll/kategori durumu kaybolmaz -> kasma hissi azalir, tekrar yukleme olmaz
+    var tabIdx by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    var tab: MainTab
+        get() = MainTab.entries[tabIdx.coerceIn(0, MainTab.entries.size - 1)]
+        set(v) { tabIdx = MainTab.entries.indexOf(v).coerceAtLeast(0) }
     val act = LocalContext.current as? Activity
     var lastBack by remember { mutableLongStateOf(0L) }
     BackHandler {
@@ -375,15 +385,28 @@ fun HomeScreen(
             Toast.makeText(act, "Çıkmak için tekrar bas", Toast.LENGTH_SHORT).show()
         }
     }
+    val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
 
     Box(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
-        when (tab) {
-            MainTab.HOME -> DiscoverTab(session, onSourceSwitch, onSearch, onPlayChannel, onOpenMovie, onOpenSeries)
-            MainTab.TV -> TvTab(session, onSearch, onPlayChannel)
-            MainTab.MOVIES -> MovieTab(session, onSearch, onOpenMovie)
-            MainTab.SERIES -> SeriesTab(session, onSearch, onOpenSeries)
-            MainTab.SETTINGS -> SettingsTab(session, onRefresh, onSourceSwitch, onLogout)
-        }
+        androidx.compose.runtime.saveable.SaveableStateProvider(tab.ordinal, content = {
+            when (tab) {
+                MainTab.HOME -> holder.SaveableStateProvider(0) {
+                    DiscoverTab(session, onSourceSwitch, onSearch, onPlayChannel, onOpenMovie, onOpenSeries)
+                }
+                MainTab.TV -> holder.SaveableStateProvider(1) {
+                    TvTab(session, onSearch, onPlayChannel)
+                }
+                MainTab.MOVIES -> holder.SaveableStateProvider(2) {
+                    MovieTab(session, onSearch, onOpenMovie)
+                }
+                MainTab.SERIES -> holder.SaveableStateProvider(3) {
+                    SeriesTab(session, onSearch, onOpenSeries)
+                }
+                MainTab.SETTINGS -> holder.SaveableStateProvider(4) {
+                    SettingsTab(session, onRefresh, onSourceSwitch, onLogout)
+                }
+            }
+        })
         // yuzen cam alt menu (opak + cizgili)
         Row(
             Modifier.align(Alignment.BottomCenter)
@@ -663,7 +686,7 @@ private fun HeroSlider(
                         Text(s.badge, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(Modifier.height(12.dp))
-                    Text(s.title, fontSize = 32.sp, lineHeight = 34.sp,
+                    Text(s.title, fontSize = 28.sp, lineHeight = 30.sp,
                         fontWeight = FontWeight.ExtraBold, color = Color.White,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(10.dp))
@@ -714,26 +737,28 @@ private fun LiveRail(
     onPlay: (StalkerChannel) -> Unit,
     busyId: String?
 ) {
+    val ctx = LocalContext.current
     var epg by remember { mutableStateOf<Map<String, EpgEntry>>(emptyMap()) }
+    // Kaynakta varsa kaynaktan, yoksa internetten (global + TR). Max 10 kanal, 6 paralel.
     LaunchedEffect(session.sourceId) {
-        if (session.xServer.isNotBlank()) {
-            try {
-                val x = XtreamClient(session.xServer, session.xUser, session.xPass)
-                coroutineScope {
-                    session.channels.take(12).map { ch ->
-                        async(Dispatchers.IO) {
-                            val sid = ch.id.removePrefix("live_")
-                            val e = if (sid != ch.id) {
-                                try { EpgCache.get(x, sid) } catch (_: Exception) { null }
-                            } else null
+        try {
+            val sem = kotlinx.coroutines.sync.Semaphore(6)
+            coroutineScope {
+                session.channels.take(10).map { ch ->
+                    async(Dispatchers.IO) {
+                        sem.acquire()
+                        try {
+                            val e = try {
+                                com.bayram.xqtvapp.data.EpgXml.lookupNow(ctx, session, ch)
+                            } catch (_: Exception) { null }
                             ch.id to e
-                        }
-                    }.awaitAll().forEach { (id, e) ->
-                        if (e != null) epg = epg + (id to e)
+                        } finally { sem.release() }
                     }
+                }.awaitAll().forEach { (id, e) ->
+                    if (e != null) epg = epg + (id to e)
                 }
-            } catch (_: Exception) { }
-        }
+            }
+        } catch (_: Exception) { }
     }
     LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -859,11 +884,11 @@ fun CatChips(cats: List<String>, selected: String, onSelect: (String) -> Unit) {
 
 /** Kaydirmali ray (az ogeli listelerde ic ice lazy yerine: kasmayi onler). */
 @Composable
-fun RailRow(content: @Composable RowScope.() -> Unit) {
+fun RailRow(hPad: androidx.compose.ui.unit.Dp = 20.dp, content: @Composable RowScope.() -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = hPad),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         content = content
     )
@@ -978,21 +1003,31 @@ fun ChannelCard(ch: StalkerChannel, busy: Boolean, isFav: Boolean, onFav: () -> 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MovieTab(session: Session, onSearch: (String) -> Unit, onOpenMovie: (StalkerChannel) -> Unit) {
-    var cat by remember { mutableStateOf("Tümü") }
+    var cat by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("Tümü") }
     val cats = remember(session) { listOf("Tümü") + session.movies.map { it.genre }.distinct().sorted() }
     val list = remember(session, cat) {
-        session.movies.filter { cat == "Tümü" || it.genre == cat }
+        if (cat == "Tümü") session.movies else session.movies.filter { it.genre == cat }
     }
     val feat = remember(list) { list.take(3) }
     val pager = rememberPagerState(pageCount = { feat.size.coerceAtLeast(1) })
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-    var shown by remember(list) { mutableIntStateOf(60) }
+    // Sayfalama: ilk 30 poster, kaydirdikca +30 (60 yerine 30 -> ilk acilis 2x hizli, kasma az)
+    var shown by remember(list) { mutableIntStateOf(30) }
     val lastVis = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
     LaunchedEffect(lastVis, list.size) {
-        if (lastVis >= shown - 12 && shown < list.size) shown = (shown + 60).coerceAtMost(list.size)
+        if (lastVis >= shown - 10 && shown < list.size) shown = (shown + 30).coerceAtMost(list.size)
     }
     val shownList = remember(list, shown) { list.take(shown) }
+    // "Tümü" modunda tur raflari: hepsini tek izgara yerine kesfet raflari
+    val genreRails = remember(session) {
+        if (session.movies.size < 20) emptyList()
+        else session.movies.groupBy { it.genre }
+            .filter { it.value.size >= 4 }
+            .toList().sortedByDescending { it.second.size }.take(4)
+    }
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
+        // Sayfa basligi: sol kenar 20.dp (PAGE_H). Izgara ici basliklar hPad=0 kullanir,
+        // izgara contentPadding 20.dp oldugu icin F harfiyle birebir hizalanir.
         Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -1037,19 +1072,44 @@ fun MovieTab(session: Session, onSearch: (String) -> Unit, onOpenMovie: (Stalker
                 }
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Column {
-                        SectionHead("Yeni eklenenler", 0)
-                        RailRow {
-                            list.take(8).forEach { m ->
+                        // hPad=0 -> izgara kenarina yaslanir = "Filmler" F harfiyle ayni hiza
+                        SectionHead("Yeni eklenenler", 0, hPad = 0.dp)
+                        RailRow(hPad = 0.dp) {
+                            list.take(10).forEach { m ->
                                 Box(Modifier.width(128.dp)) {
                                     GridPosterCell(m.name, m.logo) { onOpenMovie(m) }
                                 }
                             }
                         }
-                        SectionHead(if (cat == "Tümü") "Tüm filmler" else cat, list.size)
                     }
                 }
+                // Tur raflari (yalnizca "Tümü" seciliyken): tek dev izgara yerine kesfet
+                if (cat == "Tümü") {
+                    genreRails.forEach { (g, items) ->
+                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                            Column(Modifier.padding(top = 6.dp)) {
+                                SectionHead(g, items.size, "Tümü", hPad = 0.dp,
+                                    onAction = { cat = g })
+                                RailRow(hPad = 0.dp) {
+                                    items.take(10).forEach { m ->
+                                        Box(Modifier.width(128.dp)) {
+                                            GridPosterCell(m.name, m.logo) { onOpenMovie(m) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    // Izgara basligi da hizali: "Kesfet" F ile ayni dikeyde baslar
+                    SectionHead(
+                        if (cat == "Tümü") "Keşfet" else cat,
+                        list.size, hPad = 0.dp
+                    )
+                }
             }
-            items(shownList, key = { it.id }) { m ->
+            items(shownList, key = { it.id }, contentType = { "poster" }) { m ->
                 GridPosterCell(m.name, m.logo) { onOpenMovie(m) }
             }
             if (shown < list.size) {
@@ -1066,20 +1126,26 @@ fun MovieTab(session: Session, onSearch: (String) -> Unit, onOpenMovie: (Stalker
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SeriesTab(session: Session, onSearch: (String) -> Unit, onOpenSeries: (SeriesEntry) -> Unit) {
-    var cat by remember { mutableStateOf("Tümü") }
+    var cat by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("Tümü") }
     val cats = remember(session) { listOf("Tümü") + session.series.map { it.category }.distinct().sorted() }
     val list = remember(session, cat) {
-        session.series.filter { cat == "Tümü" || it.category == cat }
+        if (cat == "Tümü") session.series else session.series.filter { it.category == cat }
     }
     val feat = remember(list) { list.take(3) }
     val pager = rememberPagerState(pageCount = { feat.size.coerceAtLeast(1) })
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-    var shown by remember(list) { mutableIntStateOf(60) }
+    var shown by remember(list) { mutableIntStateOf(30) }
     val lastVis = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
     LaunchedEffect(lastVis, list.size) {
-        if (lastVis >= shown - 12 && shown < list.size) shown = (shown + 60).coerceAtMost(list.size)
+        if (lastVis >= shown - 10 && shown < list.size) shown = (shown + 30).coerceAtMost(list.size)
     }
     val shownList = remember(list, shown) { list.take(shown) }
+    val catRails = remember(session) {
+        if (session.series.size < 12) emptyList()
+        else session.series.groupBy { it.category }
+            .filter { it.value.size >= 3 }
+            .toList().sortedByDescending { it.second.size }.take(4)
+    }
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -1129,19 +1195,39 @@ fun SeriesTab(session: Session, onSearch: (String) -> Unit, onOpenSeries: (Serie
                 }
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                     Column {
-                        SectionHead("Yeni bölümler", 0)
-                        RailRow {
-                            list.take(8).forEach { s ->
+                        // hPad=0 -> "Diziler" D harfiyle ayni hiza
+                        SectionHead("Yeni bölümler", 0, hPad = 0.dp)
+                        RailRow(hPad = 0.dp) {
+                            list.take(10).forEach { s ->
                                 Box(Modifier.width(128.dp)) {
                                     GridPosterCell(s.name, s.cover) { onOpenSeries(s) }
                                 }
                             }
                         }
-                        SectionHead("Tüm diziler", list.size)
                     }
                 }
+                if (cat == "Tümü") {
+                    catRails.forEach { (g, items) ->
+                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                            Column(Modifier.padding(top = 6.dp)) {
+                                SectionHead(g, items.size, "Tümü", hPad = 0.dp,
+                                    onAction = { cat = g })
+                                RailRow(hPad = 0.dp) {
+                                    items.take(10).forEach { s ->
+                                        Box(Modifier.width(128.dp)) {
+                                            GridPosterCell(s.name, s.cover) { onOpenSeries(s) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    SectionHead(if (cat == "Tümü") "Keşfet" else cat, list.size, hPad = 0.dp)
+                }
             }
-            items(shownList, key = { it.id }) { s ->
+            items(shownList, key = { it.id }, contentType = { "poster" }) { s ->
                 GridPosterCell(s.name, s.cover) { onOpenSeries(s) }
             }
             if (shown < list.size) {
@@ -1166,8 +1252,11 @@ fun SettingsTab(
     val scope = rememberCoroutineScope()
     val autoplay by FavoritesStore.autoplayFlow(ctx).collectAsState(initial = true)
     val (audioPref, subPref) = FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off")).value
+    val defEpg by FavoritesStore.defaultEpgFlow(ctx).collectAsState(initial = "")
     var confirmDelete by remember { mutableStateOf(false) }
     var avDialog by remember { mutableStateOf(false) }
+    var epgDialog by remember { mutableStateOf(false) }
+    var epgText by remember { mutableStateOf("") }
 
     LazyColumn(
         Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
@@ -1218,6 +1307,13 @@ fun SettingsTab(
                     else -> "Kapalı"
                 }
             ) { avDialog = true }
+            SettingsRow(
+                "Varsayılan EPG listesi",
+                if (defEpg.isBlank()) "Kaynakta yoksa internetten dener" else defEpg.take(42) + "…"
+            ) {
+                epgText = defEpg
+                epgDialog = true
+            }
             SettingsRow("Kaynak değiştir", "Kayıtlı listeler") { onSourceSwitch() }
             if (!confirmDelete) {
                 SettingsRow("Kaynağı sil", "Bu cihazdan kaldır", danger = true) {
@@ -1235,8 +1331,44 @@ fun SettingsTab(
                     ) { Text("Evet, sil", color = Color.White) }
                 }
             }
+            if (epgDialog) {
+                AlertDialog(
+                    onDismissRequest = { epgDialog = false },
+                    title = { Text("Varsayılan EPG listesi", fontSize = 18.sp) },
+                    text = {
+                        Column {
+                            Text("Kaynağın kendi program bilgisi yoksa bu adresteki XMLTV listesi kullanılır.",
+                                color = PTx2, fontSize = 13.sp)
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = epgText, onValueChange = { epgText = it },
+                                placeholder = { Text("https://…/epg.xml") },
+                                singleLine = false, minLines = 2,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            scope.launch {
+                                FavoritesStore.setDefaultEpg(ctx, epgText)
+                                epgDialog = false
+                            }
+                        }) { Text("Kaydet") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = {
+                            scope.launch {
+                                FavoritesStore.setDefaultEpg(ctx, "")
+                                epgDialog = false
+                            }
+                        }) { Text("Temizle") }
+                    }
+                )
+            }
             Spacer(Modifier.height(20.dp))
-            Text("Portio v2.0 • Tüm yayınların tek yerde.",
+            Text("Portio v2.8 • Tüm yayınların tek yerde.",
                 color = PTx2, fontSize = 12.sp)
             if (avDialog) {
                 AlertDialog(
@@ -1332,6 +1464,12 @@ fun SearchScreen(
     BackHandler { onClose() }
     val scope = rememberCoroutineScope()
     var q by remember { mutableStateOf("") }
+    // Arama debounce: her harfte filtre + liste yeniden kurma kasmayi onler
+    var debounced by remember { mutableStateOf("") }
+    LaunchedEffect(q) {
+        delay(300)
+        debounced = q.trim()
+    }
     var busy by remember { mutableStateOf<String?>(null) }
     var glowColor by remember { mutableStateOf(Color(0xFF4B35D6)) }
     val glowAnim by animateColorAsState(glowColor, animationSpec = tween(800), label = "homeGlow")
@@ -1379,18 +1517,25 @@ fun SearchScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
             shape = RoundedCornerShape(14.dp), singleLine = true)
         Spacer(Modifier.height(8.dp))
-        if (q.isBlank()) {
+        if (debounced.isBlank()) {
             Text("Örn: spor, aksiyon, haber...", color = PTx2,
                 modifier = Modifier.padding(20.dp))
             return@Column
         }
+        // Filtreler remember'da: her recompose'da yeniden filtre yok
+        val chs = remember(debounced, filter, session) {
+            if (filter == "all" || filter == "live")
+                session.channels.filter { it.name.contains(debounced, true) }.take(30) else emptyList()
+        }
+        val mvs = remember(debounced, filter, session) {
+            if (filter == "all" || filter == "movie")
+                session.movies.filter { it.name.contains(debounced, true) }.take(30) else emptyList()
+        }
+        val srs = remember(debounced, filter, session) {
+            if (filter == "all" || filter == "series")
+                session.series.filter { it.name.contains(debounced, true) }.take(20) else emptyList()
+        }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(8.dp, 8.dp, 8.dp, 20.dp)) {
-            val chs = if (filter == "all" || filter == "live")
-                session.channels.filter { it.name.contains(q, true) }.take(30) else emptyList()
-            val mvs = if (filter == "all" || filter == "movie")
-                session.movies.filter { it.name.contains(q, true) }.take(30) else emptyList()
-            val srs = if (filter == "all" || filter == "series")
-                session.series.filter { it.name.contains(q, true) }.take(20) else emptyList()
             if (chs.isNotEmpty()) {
                 item { Text("Kanallar", fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(20.dp, 8.dp, 20.dp, 4.dp)) }
