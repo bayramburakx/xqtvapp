@@ -1,0 +1,270 @@
+package com.bayram.xqtvapp.data
+
+import android.content.Context
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.xmlpull.v1.XmlPullParserFactory
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
+
+/**
+ * Internet XMLTV yedegi: kaynagin kendi EPG'si yoksa (ozellikle M3U),
+ * listedeki url-tvg adresinden program bilgisi cekilir.
+ * 24 saat dosyada durur; eslesme normalize kanal adiyla yapilir.
+ */
+object EpgXml {
+    private const val TTL_MS = 24L * 60 * 60 * 1000
+    private const val MAX_BYTES = 15 * 1024 * 1024
+    private val gson = Gson()
+
+    private val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+    }
+
+    private data class Dump(
+        val savedAt: Long = 0L,
+        val byName: Map<String, List<EpgEntry>> = emptyMap()
+    )
+
+    private val mem = LinkedHashMap<String, Dump>()
+    private val type = object : TypeToken<Dump>() {}.type
+
+    fun normalize(name: String): String =
+        name.lowercase()
+            .replace(Regex("\\.(m3u8|mp4|mkv|ts)$"), "")
+            .replace(Regex("\\b(1080p|720p|480p|4k|uhd|fhd|hd|sd)\\b"), "")
+            .replace(Regex("[^a-z0-9çğıöşü]+"), "")
+            .trim()
+
+    private fun cacheFile(ctx: Context, m3uUrl: String): File {
+        val key = (m3uUrl.hashCode().toUInt().toString(16))
+        return File(ctx.filesDir, "portio_epg_$key.json")
+    }
+
+    /** M3U basligindaki url-tvg adresini bul (ilk 64KB yeterli). */
+    private fun findUrlTvg(m3uUrl: String): String? {
+        return try {
+            val req = Request.Builder().url(m3uUrl)
+                .header("User-Agent", "Portio/2.0")
+                .header("Range", "bytes=0-65535")
+                .header("Icy-MetaData", "0")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful && resp.code != 206) return null
+                val head = resp.body?.byteStream()?.use { it.readBytes(65536) } ?: return null
+                val text = head.toString(Charsets.UTF_8)
+                Regex("""url-tvg="([^"]+)"""").find(text)?.groupValues?.get(1)
+                    ?: Regex("""x-tvg-url="([^"]+)"""").find(text)?.groupValues?.get(1)
+            }
+        } catch (_: Exception) { null }
+    }
+
+    private fun downloadCapped(url: String): ByteArray? {
+        return try {
+            val req = Request.Builder().url(url)
+                .header("User-Agent", "Portio/2.0")
+                .header("Accept-Encoding", "gzip")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val body = resp.body ?: return null
+                val isGzip = url.endsWith(".gz") ||
+                        resp.header("Content-Encoding", "").contains("gzip", true)
+                val stream = if (isGzip) GZIPInputStream(body.byteStream()) else body.byteStream()
+                stream.use {
+                    val out = java.io.ByteArrayOutputStream()
+                    val buf = ByteArray(32 * 1024)
+                    var total = 0
+                    while (true) {
+                        val n = it.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_BYTES) return null
+                        out.write(buf, 0, n)
+                    }
+                    out.toByteArray()
+                }
+            }
+        } catch (_: Exception) { null }
+    }
+
+    private fun parseXml(data: ByteArray): Map<String, List<EpgEntry>> {
+        val out = mutableMapOf<String, MutableList<EpgEntry>>()
+        try {
+            val factory = XmlPullParserFactory.newInstance()
+            factory.isNamespaceAware = false
+            val p = factory.newPullParser()
+            p.setInput(ByteArrayInputStream(data), "UTF-8")
+            val nowS = System.currentTimeMillis() / 1000
+            val minS = nowS - 6 * 3600
+            val maxS = nowS + 48 * 3600
+            var ev = p.eventType
+            var inProg = false
+            var ch = ""
+            var start = 0L
+            var stop = 0L
+            var title = ""
+            var desc = ""
+            var curTag = ""
+            var count = 0
+            while (ev != org.xmlpull.v1.XmlPullParser.END_DOCUMENT && count < 60000) {
+                when (ev) {
+                    org.xmlpull.v1.XmlPullParser.START_TAG -> {
+                        when (p.name) {
+                            "programme" -> {
+                                inProg = true
+                                ch = p.getAttributeValue(null, "channel") ?: ""
+                                start = xmltvTime(p.getAttributeValue(null, "start"))
+                                stop = xmltvTime(p.getAttributeValue(null, "stop"))
+                                title = ""; desc = ""
+                            }
+                            "title", "desc" -> curTag = p.name
+                            else -> curTag = ""
+                        }
+                    }
+                    org.xmlpull.v1.XmlPullParser.TEXT -> {
+                        if (inProg) {
+                            val tx = p.text ?: ""
+                            if (curTag == "title") title += tx
+                            else if (curTag == "desc" && desc.length < 500) desc += tx
+                        }
+                    }
+                    org.xmlpull.v1.XmlPullParser.END_TAG -> {
+                        if (p.name == "programme") {
+                            inProg = false
+                            if (ch.isNotEmpty() && title.isNotBlank() &&
+                                stop > minS && start < maxS && start < stop
+                            ) {
+                                out.getOrPut(ch) { mutableListOf() }
+                                    .add(EpgEntry(title.trim(), start, stop, desc.trim()))
+                                count++
+                            }
+                        }
+                        curTag = ""
+                    }
+                }
+                ev = p.next()
+            }
+        } catch (_: Exception) { }
+        return out
+    }
+
+    private fun xmltvTime(raw: String?): Long {
+        if (raw.isNullOrBlank()) return 0L
+        return try {
+            val s = raw.trim().replace(" ", "")
+            // 20251002180000 +0300
+            val core = s.take(14)
+            val dt = java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US)
+            dt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            var t = dt.parse(core)?.time?.div(1000) ?: 0L
+            val tz = Regex("""([+-])(\d{2})(\d{2})$""").find(s)
+            if (tz != null) {
+                val off = tz.groupValues[2].toLong() * 3600 + tz.groupValues[3].toLong() * 60
+                t -= if (tz.groupValues[1] == "+") off else -off
+            }
+            t
+        } catch (_: Exception) { 0L }
+    }
+
+    private suspend fun ensureLoaded(ctx: Context, m3uUrl: String): Dump = withContext(Dispatchers.IO) {
+        synchronized(mem) {
+            mem[m3uUrl]?.let { if (System.currentTimeMillis() - it.savedAt < TTL_MS) return@withContext it }
+        }
+        val f = cacheFile(ctx, m3uUrl)
+        try {
+            if (f.exists()) {
+                val d = gson.fromJson<Dump>(f.readText(), type)
+                if (System.currentTimeMillis() - d.savedAt < TTL_MS) {
+                    synchronized(mem) { mem[m3uUrl] = d }
+                    return@withContext d
+                }
+            }
+        } catch (_: Exception) { }
+        var dump = Dump(System.currentTimeMillis(), emptyMap())
+        val tvg = findUrlTvg(m3uUrl)
+        if (tvg != null) {
+            val data = downloadCapped(tvg)
+            if (data != null) {
+                val byId = parseXml(data)
+                // id -> normalize ad eslemesi icin kanal adlarini da sakla: id'yi normalize edip ekle
+                val byName = mutableMapOf<String, MutableList<EpgEntry>>()
+                byId.forEach { (id, list) ->
+                    byName.getOrPut(normalize(id)) { mutableListOf() }.addAll(list)
+                }
+                // ayni listeyi id anahtariyla da erisilebilir kil
+                byId.forEach { (id, list) ->
+                    byName.getOrPut(id) { mutableListOf() }.addAll(list)
+                }
+                byName.values.forEach { it.sortBy { e -> e.startEpoch } }
+                dump = Dump(System.currentTimeMillis(), byName)
+                try { f.writeText(gson.toJson(dump)) } catch (_: Exception) { }
+            }
+        }
+        synchronized(mem) { mem[m3uUrl] = dump }
+        dump
+    }
+
+    /** Tek kanal icin su anki yayin (once Xtream denenir, sonra XMLTV). */
+    suspend fun lookupNow(
+        ctx: Context, session: com.bayram.xqtvapp.Session, ch: StalkerChannel
+    ): EpgEntry? {
+        // 1) kaynak EPG'si
+        if (session.xServer.isNotBlank()) {
+            try {
+                val sid = ch.id.removePrefix("live_")
+                if (sid != ch.id) {
+                    val x = XtreamClient(session.xServer, session.xUser, session.xPass)
+                    EpgCache.get(x, sid)?.let { return it }
+                }
+            } catch (_: Exception) { }
+        }
+        // 2) XMLTV yedegi
+        if (session.m3uUrl.isNotBlank()) {
+            try {
+                val dump = ensureLoaded(ctx, session.m3uUrl)
+                val now = System.currentTimeMillis() / 1000
+                dump.byName[normalize(ch.name)]?.firstOrNull {
+                    it.startEpoch <= now && now < it.endEpoch
+                }?.let { return it }
+            } catch (_: Exception) { }
+        }
+        return null
+    }
+
+    /** Rehber icin gunluk akis (once kaynak, sonra XMLTV). */
+    suspend fun lookupDay(
+        ctx: Context, session: com.bayram.xqtvapp.Session, ch: StalkerChannel
+    ): List<EpgEntry> {
+        if (session.xServer.isNotBlank()) {
+            try {
+                val sid = ch.id.removePrefix("live_")
+                if (sid != ch.id) {
+                    val x = XtreamClient(session.xServer, session.xUser, session.xPass)
+                    val l = EpgCache.getDay(x, sid)
+                    if (l.isNotEmpty()) return l
+                }
+            } catch (_: Exception) { }
+        }
+        if (session.m3uUrl.isNotBlank()) {
+            try {
+                val dump = ensureLoaded(ctx, session.m3uUrl)
+                val now = System.currentTimeMillis() / 1000
+                val l = (dump.byName[normalize(ch.name)] ?: emptyList())
+                    .filter { it.endEpoch > now - 3600 }
+                if (l.isNotEmpty()) return l
+            } catch (_: Exception) { }
+        }
+        return emptyList()
+    }
+}
