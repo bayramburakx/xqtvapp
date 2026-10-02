@@ -337,7 +337,6 @@ private fun EpgGuide(
 ) {
     val ctx = LocalContext.current
     var days by remember { mutableStateOf<Map<String, List<EpgEntry>>>(emptyMap()) }
-    val ctx = LocalContext.current
     var guideDone by remember { mutableStateOf(false) }
     LaunchedEffect(list, session.sourceId) {
         guideDone = false
