@@ -51,7 +51,14 @@ class XtreamClient(
             client.newCall(req).execute().use { resp ->
                 val text = resp.body?.string() ?: return@withContext JSONArray()
                 try {
-                    if (text.trimStart().startsWith("[")) JSONArray(text) else JSONArray()
+                    val t = text.trimStart()
+                    if (t.startsWith("[")) return@withContext JSONArray(t)
+                    // {"epg_listings":[...]} / {"data":[...]} seklinde nesneler
+                    val o = JSONObject(t)
+                    for (k in listOf("epg_listings", "data", "epg", "listings", "items")) {
+                        o.optJSONArray(k)?.let { return@withContext it }
+                    }
+                    JSONArray()
                 } catch (_: Exception) { JSONArray() }
             }
         } catch (e: Exception) {
@@ -222,11 +229,14 @@ class XtreamClient(
         val out = mutableListOf<EpgNow>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
-            val start = o.optString("start", "0").toLongOrNull() ?: 0L
-            val end = o.optString("end", "0").toLongOrNull() ?: 0L
-            val title = o.optString("title", "")
+            val start = (o.optString("start", "").ifBlank { o.optString("start_timestamp", "0") })
+                .toLongOrNull() ?: 0L
+            val end = (o.optString("end", "").ifBlank { o.optString("stop_timestamp",
+                o.optString("end_timestamp", o.optString("stop", "0"))) })
+                .toLongOrNull() ?: 0L
+            val title = o.optString("title", o.optString("name", ""))
             if (start > 0 && end > start && title.isNotEmpty()) {
-                out.add(EpgNow(title, start, end, o.optString("description", "")))
+                out.add(EpgNow(title, start, end, o.optString("description", o.optString("desc", ""))))
             }
         }
         return out.sortedBy { it.startEpoch }
