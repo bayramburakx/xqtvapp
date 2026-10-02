@@ -659,7 +659,6 @@ fun MiniBar(title: String, onBack: () -> Unit, onPlay: () -> Unit) {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AvSheet(audio: String, sub: String, onPick: (String, String) -> Unit, onClose: () -> Unit) {
     var a by remember { mutableStateOf(audio) }
