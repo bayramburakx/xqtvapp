@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -196,7 +197,7 @@ object EpgXml {
 
     private suspend fun ensureLoaded(ctx: Context, m3uUrl: String): Dump = withContext(Dispatchers.IO) {
         val defUrl = try {
-            kotlinx.coroutines.flow.first(com.bayram.xqtvapp.data.FavoritesStore.defaultEpgFlow(ctx))
+            FavoritesStore.defaultEpgFlow(ctx).first()
         } catch (_: Exception) { "" }
         // kaynak M3U degilse (Xtream/Stalker) varsayilan listeyi dogrudan indir
         if (m3uUrl.isBlank() && defUrl.isNotBlank()) {
