@@ -14,15 +14,25 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import androidx.media3.common.C
 import androidx.media3.common.TrackSelectionOverride
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -150,10 +160,54 @@ object PlayerBackend {
             }
         } catch (_: Exception) { }
     }
+
+    /** Gercek video yukseklikleri (kalite listesi icin), buyukten kucuge. */
+    fun videoHeights(exo: ExoPlayer): List<Int> {
+        return try {
+            exo.currentTracks.groups
+                .filter { it.type == C.TRACK_TYPE_VIDEO }
+                .flatMap { g -> (0 until g.length).map { g.getTrackFormat(it).height } }
+                .filter { it > 0 }
+                .distinct()
+                .sortedDescending()
+        } catch (_: Exception) { emptyList() }
+    }
+
+    /** height=null -> otomatik. */
+    fun setQuality(exo: ExoPlayer, height: Int?) {
+        try {
+            var b = exo.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+            if (height != null) {
+                exo.currentTracks.groups.forEach { g ->
+                    if (g.type != C.TRACK_TYPE_VIDEO) return@forEach
+                    for (ti in 0 until g.length) {
+                        if (!g.isTrackSupported(ti)) continue
+                        if (g.getTrackFormat(ti).height == height) {
+                            b = b.setOverrideForType(
+                                TrackSelectionOverride(g.mediaTrackGroup, listOf(ti))
+                            )
+                            exo.trackSelectionParameters = b.build()
+                            return
+                        }
+                    }
+                }
+            }
+            exo.trackSelectionParameters = b.build()
+        } catch (_: Exception) { }
+    }
+
+    val SUB_SIZES_SP = listOf(15f, 19f, 24f)
 }
 
 @Composable
-fun TrackDialog(exo: ExoPlayer, tick: Int, onClose: () -> Unit) {    key(tick) {
+fun TrackDialog(
+    exo: ExoPlayer,
+    tick: Int,
+    onClose: () -> Unit,
+    subSize: Int = 1,
+    onSubSize: ((Int) -> Unit)? = null
+) {    key(tick) {
         val audio = mutableListOf<TrackOpt>()
         val text = mutableListOf<TrackOpt>()
         exo.currentTracks.groups.forEachIndexed { gi, g ->
@@ -209,6 +263,20 @@ fun TrackDialog(exo: ExoPlayer, tick: Int, onClose: () -> Unit) {    key(tick) {
                             onClose()
                         }
                     }
+                    if (onSubSize != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Altyazı boyutu", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(top = 8.dp)) {
+                            listOf("Küçük", "Orta", "Büyük").forEachIndexed { i, n ->
+                                FilterChip(
+                                    selected = subSize == i,
+                                    onClick = { onSubSize(i) },
+                                    label = { Text(n) }
+                                )
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = { TextButton(onClick = onClose) { Text("Kapat") } }
@@ -260,4 +328,104 @@ fun SleepDialog(sleepMin: Int, onPick: (Int) -> Unit, onClose: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onClose) { Text("Kapat") } }
     )
+}
+
+// ---------- paylasilan player sayfalari ----------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SheetShell(title: String, onClose: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    ModalBottomSheet(
+        onDismissRequest = onClose,
+        containerColor = Color(0xFF171722),
+        dragHandle = {
+            Box(Modifier.padding(10.dp).width(40.dp).height(5.dp)
+                .clip(RoundedCornerShape(9.dp)).background(PLine))
+        }
+    ) {
+        Column(Modifier.padding(horizontal = 22.dp).padding(bottom = 24.dp)) {
+            Text(title, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.padding(bottom = 4.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+fun SheetOption(label: String, on: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickableNoRipple(onClick).padding(vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 16.sp, modifier = Modifier.weight(1f))
+        Box(
+            Modifier.size(20.dp).clip(CircleShape)
+                .then(if (on) Modifier.background(Color.White)
+                else Modifier.border(2.dp, PLine, CircleShape))
+        )
+    }
+    HorizontalDivider(color = PLine)
+}
+
+@Composable
+fun EpisodeSidePanel(
+    title: String,
+    episodes: List<com.bayram.xqtvapp.data.EpisodeEntry>,
+    current: Int,
+    onPick: (Int) -> Unit,
+    onClose: () -> Unit
+) {
+    AnimatedVisibility(
+        visible = true,
+        enter = slideInHorizontally { it },
+        exit = slideOutHorizontally { it }
+    ) {
+        Box(Modifier.fillMaxSize().background(Color(0x80000000))
+            .clickableNoRipple(onClose)) {
+            Column(
+                Modifier.fillMaxHeight().width(340.dp).align(Alignment.CenterEnd)
+                    .clip(RoundedCornerShape(28.dp, 0.dp, 0.dp, 28.dp))
+                    .background(Color(0xFF171722))
+                    .padding(14.dp, 16.dp)
+            ) {
+                Text(title.ifBlank { "Bölümler" }, fontSize = 22.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(6.dp, 0.dp, 6.dp, 12.dp),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(episodes.size) { i ->
+                        val ep = episodes[i]
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (i == current) Color.White.copy(alpha = 0.1f)
+                                    else Color.Transparent
+                                )
+                                .clickableNoRipple { onPick(i) }
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(Modifier.width(104.dp).height(58.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(tileBrush(ep.id)),
+                                contentAlignment = Alignment.Center) {
+                                Text("▶", color = Color.White, fontSize = 16.sp)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("S${ep.season} B${ep.episode}",
+                                    fontSize = 11.sp, fontWeight = FontWeight.Bold, color = PTx2)
+                                Text(ep.title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            if (i == current) {
+                                Icon(Icons.Filled.PlayArrow, null, tint = Color.White,
+                                    modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
