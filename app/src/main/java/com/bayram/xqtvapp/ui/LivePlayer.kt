@@ -121,7 +121,11 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
 
     DisposableEffect(Unit) {
         view.keepScreenOn = true
-        onDispose { view.keepScreenOn = false }
+        PlayerBackend.immersive(view, true)
+        onDispose {
+            view.keepScreenOn = false
+            PlayerBackend.immersive(view, false)
+        }
     }
 
     // EPG: gecerli kanal icin gunluk akis (kaynak + internet XMLTV yedegi)
@@ -267,7 +271,10 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
                         it.resizeMode = LiveResizeModes[resizeIdx]
                     }
                 },
-                update = { it.resizeMode = LiveResizeModes[resizeIdx] },
+                update = {
+                    it.player = exo
+                    it.resizeMode = LiveResizeModes[resizeIdx]
+                },
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -365,7 +372,7 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
                 if (req.zap.isNotEmpty()) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.clickableNoRipple { zapTo(currentIdx - 1); poke() }) {
-                        GlassCircleButton(Icons.Filled.KeyboardArrowUp, {}, size = 56.dp)
+                        GlassCircleButton(Icons.Filled.KeyboardArrowUp, { zapTo(currentIdx - 1); poke() }, size = 56.dp)
                         Text(req.zap.getOrNull((currentIdx - 1 + req.zap.size) % req.zap.size)?.name ?: "",
                             color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -382,7 +389,7 @@ fun LivePlayerScreen(req: PlayReq, onBack: () -> Unit) {
                 if (req.zap.isNotEmpty()) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.clickableNoRipple { zapTo(currentIdx + 1); poke() }) {
-                        GlassCircleButton(Icons.Filled.KeyboardArrowDown, {}, size = 56.dp)
+                        GlassCircleButton(Icons.Filled.KeyboardArrowDown, { zapTo(currentIdx + 1); poke() }, size = 56.dp)
                         Text(req.zap.getOrNull((currentIdx + 1) % req.zap.size)?.name ?: "",
                             color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
