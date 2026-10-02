@@ -172,7 +172,7 @@ fun AppNav() {
     var play by remember { mutableStateOf<PlayReq?>(null) }
     var movieDetail by remember { mutableStateOf<StalkerChannel?>(null) }
     var seriesDetail by remember { mutableStateOf<SeriesEntry?>(null) }
-    var searchOpen by remember { mutableStateOf(false) }
+    var searchScope by remember { mutableStateOf<String?>(null) }
     var sources by remember { mutableStateOf<List<SourceEntry>>(emptyList()) }
     var counts by remember { mutableStateOf<Map<String, Triple<Int, Int, Int>>>(emptyMap()) }
     var lastId by remember { mutableStateOf<String?>(null) }
@@ -288,7 +288,7 @@ fun AppNav() {
                 HomeScreen(
                     session = s,
                     onSourceSwitch = { root = Root.Sources },
-                    onSearch = { searchOpen = true },
+                    onSearch = { searchScope = it },
                     onRefresh = { root = Root.Loading(
                         SourceEntry(s.sourceId, s.sourceName,
                             when {
@@ -356,7 +356,7 @@ private enum class MainTab(val title: String, val icon: ImageVector) {
 fun HomeScreen(
     session: Session,
     onSourceSwitch: () -> Unit,
-    onSearch: () -> Unit,
+    onSearch: (String) -> Unit,
     onRefresh: () -> Unit,
     onLogout: () -> Unit,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit,
@@ -416,7 +416,7 @@ private fun HomeHeader(
     sourceName: String,
     typeLabel: String,
     onSourceSwitch: () -> Unit,
-    onSearch: () -> Unit
+    onSearch: (String) -> Unit
 ) {
     Row(Modifier.fillMaxWidth().padding(20.dp, 14.dp, 20.dp, 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
@@ -436,7 +436,7 @@ private fun HomeHeader(
         Spacer(Modifier.width(10.dp))
         Box(
             Modifier.size(36.dp).clip(CircleShape).background(PGlass)
-                .clickableNoRipple(onSearch),
+                .clickableNoRipple({ onSearch("all") }),
             contentAlignment = Alignment.Center
         ) { Icon(Icons.Filled.Search, "Ara", tint = Color.White, modifier = Modifier.size(18.dp)) }
     }
@@ -449,7 +449,7 @@ private fun HomeHeader(
 fun DiscoverTab(
     session: Session,
     onSourceSwitch: () -> Unit,
-    onSearch: () -> Unit,
+    onSearch: (String) -> Unit,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
     onOpenSeries: (SeriesEntry) -> Unit
@@ -530,6 +530,7 @@ fun DiscoverTab(
             }
         }
 
+        item { Spacer(Modifier.height(10.dp)) }
         if (session.channels.isNotEmpty()) {
             item {
                 SectionHead("Şimdi canlı", session.channels.size, "Rehber", onAction = {})
@@ -537,6 +538,7 @@ fun DiscoverTab(
             }
         }
 
+        item { Spacer(Modifier.height(10.dp)) }
         if (session.movies.isNotEmpty()) {
             item {
                 SectionHead("Yeni filmler", session.movies.size, "Tümü", onAction = {})
@@ -549,6 +551,7 @@ fun DiscoverTab(
             }
         }
 
+        item { Spacer(Modifier.height(10.dp)) }
         if (session.series.isNotEmpty()) {
             item {
                 SectionHead("Popüler diziler", session.series.size, "Tümü", onAction = {})
@@ -973,7 +976,7 @@ fun ChannelCard(ch: StalkerChannel, busy: Boolean, isFav: Boolean, onFav: () -> 
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MovieTab(session: Session, onSearch: () -> Unit, onOpenMovie: (StalkerChannel) -> Unit) {
+fun MovieTab(session: Session, onSearch: (String) -> Unit, onOpenMovie: (StalkerChannel) -> Unit) {
     var cat by remember { mutableStateOf("Tümü") }
     val cats = remember(session) { listOf("Tümü") + session.movies.map { it.genre }.distinct().sorted() }
     val list = remember(session, cat) {
@@ -997,7 +1000,7 @@ fun MovieTab(session: Session, onSearch: () -> Unit, onOpenMovie: (StalkerChanne
                 Text("${list.size} film", color = PTx2, fontSize = 14.sp)
             }
             Box(Modifier.size(38.dp).clip(CircleShape).background(PGlass)
-                .clickableNoRipple(onSearch), contentAlignment = Alignment.Center) {
+                .clickableNoRipple({ onSearch("movie") }), contentAlignment = Alignment.Center) {
                 Icon(Icons.Filled.Search, "Ara", tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
@@ -1059,7 +1062,7 @@ fun MovieTab(session: Session, onSearch: () -> Unit, onOpenMovie: (StalkerChanne
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SeriesTab(session: Session, onSearch: () -> Unit, onOpenSeries: (SeriesEntry) -> Unit) {
+fun SeriesTab(session: Session, onSearch: (String) -> Unit, onOpenSeries: (SeriesEntry) -> Unit) {
     var cat by remember { mutableStateOf("Tümü") }
     val cats = remember(session) { listOf("Tümü") + session.series.map { it.category }.distinct().sorted() }
     val list = remember(session, cat) {
@@ -1083,7 +1086,7 @@ fun SeriesTab(session: Session, onSearch: () -> Unit, onOpenSeries: (SeriesEntry
                 Text("${list.size} dizi", color = PTx2, fontSize = 14.sp)
             }
             Box(Modifier.size(38.dp).clip(CircleShape).background(PGlass)
-                .clickableNoRipple(onSearch), contentAlignment = Alignment.Center) {
+                .clickableNoRipple({ onSearch("series") }), contentAlignment = Alignment.Center) {
                 Icon(Icons.Filled.Search, "Ara", tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
@@ -1315,6 +1318,7 @@ private fun SettingsRow(
 @Composable
 fun SearchScreen(
     session: Session,
+    scope: String = "all",
     onClose: () -> Unit,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit,
     onOpenMovie: (StalkerChannel) -> Unit,
@@ -1351,8 +1355,19 @@ fun SearchScreen(
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         Row(Modifier.fillMaxWidth().padding(20.dp, 18.dp, 20.dp, 6.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Text("Ara", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text("Ara", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold)
+                if (scope != "all") {
+                    Text(
+                        when (scope) {
+                            "live" -> "Yalnızca kanallar"
+                            "movie" -> "Yalnızca filmler"
+                            else -> "Yalnızca diziler"
+                        },
+                        color = PTx2, fontSize = 13.sp
+                    )
+                }
+            }
             TextButton(onClick = onClose) { Text("Kapat", color = PTx2) }
         }
         OutlinedTextField(q, { q = it }, label = { Text("Kanal, film, dizi...") },
@@ -1365,9 +1380,12 @@ fun SearchScreen(
             return@Column
         }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(8.dp, 8.dp, 8.dp, 20.dp)) {
-            val chs = session.channels.filter { it.name.contains(q, true) }.take(30)
-            val mvs = session.movies.filter { it.name.contains(q, true) }.take(30)
-            val srs = session.series.filter { it.name.contains(q, true) }.take(20)
+            val chs = if (scope == "all" || scope == "live")
+                session.channels.filter { it.name.contains(q, true) }.take(30) else emptyList()
+            val mvs = if (scope == "all" || scope == "movie")
+                session.movies.filter { it.name.contains(q, true) }.take(30) else emptyList()
+            val srs = if (scope == "all" || scope == "series")
+                session.series.filter { it.name.contains(q, true) }.take(20) else emptyList()
             if (chs.isNotEmpty()) {
                 item { Text("Kanallar", fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(20.dp, 8.dp, 20.dp, 4.dp)) }
