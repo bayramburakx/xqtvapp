@@ -315,6 +315,13 @@ fun SeriesDetailScreen(
 
     val seasons = remember(full) { full?.episodes?.map { it.season }?.distinct()?.sorted() ?: emptyList() }
     val allEps = remember(full) { full?.episodes ?: emptyList() }
+    val seriesCast = remember(full) {
+        (full?.cast ?: "").split(",").map { it.trim() }.filter { it.isNotEmpty() }.take(10)
+    }
+    val similarSeries = remember(entry.id, session) {
+        session.series.filter { it.id != entry.id && it.category == entry.category }.take(8)
+            .ifEmpty { session.series.filter { it.id != entry.id }.take(8) }
+    }
     val eps = remember(full, season) { allEps.filter { season == -1 || it.season == season } }
     val watchedCount = remember(allEps, watched) {
         allEps.count { watched.contains("series_" + it.id) }
@@ -453,13 +460,6 @@ fun SeriesDetailScreen(
                     }
                     Spacer(Modifier.height(4.dp))
                 }
-            }
-            val seriesCast = remember(full) {
-                (full?.cast ?: "").split(",").map { it.trim() }.filter { it.isNotEmpty() }.take(10)
-            }
-            val similarSeries = remember(entry.id, session) {
-                session.series.filter { it.id != entry.id && it.category == entry.category }.take(8)
-                    .ifEmpty { session.series.filter { it.id != entry.id }.take(8) }
             }
             items(eps, key = { it.id }) { ep ->
                 val idx = allEps.indexOfFirst { it.id == ep.id }
