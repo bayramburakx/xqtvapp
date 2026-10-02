@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.bayram.xqtvapp.CatChips
 import com.bayram.xqtvapp.Session
 import com.bayram.xqtvapp.data.EpgCache
 import com.bayram.xqtvapp.data.EpgEntry
@@ -419,8 +420,8 @@ private fun EpgGuide(
                             }
                             progs.forEach { p ->
                                 val left = ((p.startEpoch.coerceAtLeast(winStart) - winStart) * pxPerSec).dp
-                                val w = (((p.endEpoch.coerceAtMost(winEnd) - p.startEpoch.coerceAtLeast(winStart))) * pxPerSec) - 6)
-                                    .coerceAtLeast(40f).dp
+                                val durS = (p.endEpoch.coerceAtMost(winEnd) - p.startEpoch.coerceAtLeast(winStart)).coerceAtLeast(0)
+                                val w = ((durS * pxPerSec) - 6).coerceAtLeast(40f).dp
                                 val isNow = p.startEpoch <= now && now < p.endEpoch
                                 Box(
                                     Modifier.offset(x = left).width(w)
