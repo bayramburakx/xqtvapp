@@ -209,24 +209,27 @@ class XtreamClient(
 
     /** Kisa EPG: su anki yayin (baslik, baslangic, bitis epoch sn). Yoksa null. */
     suspend fun nowPlaying(streamId: String): EpgNow? {
+        val list = dayEpg(streamId)
+        val now = System.currentTimeMillis() / 1000
+        return list.firstOrNull { it.startEpoch <= now && now < it.endEpoch }
+    }
+
+    /** Gunluk akis listesi (rehber gorunumu icin). */
+    suspend fun dayEpg(streamId: String): List<EpgNow> {
         val arr = getArray(
             "player_api.php?${u()}&action=get_simple_data_table&stream_id=$streamId"
         )
-        if (arr.length() == 0) return null
-        val now = System.currentTimeMillis() / 1000
+        val out = mutableListOf<EpgNow>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
             val start = o.optString("start", "0").toLongOrNull() ?: 0L
             val end = o.optString("end", "0").toLongOrNull() ?: 0L
-            if (start <= now && now < end) {
-                return EpgNow(
-                    title = o.optString("title", ""),
-                    startEpoch = start, endEpoch = end,
-                    desc = o.optString("description", "")
-                )
+            val title = o.optString("title", "")
+            if (start > 0 && end > start && title.isNotEmpty()) {
+                out.add(EpgNow(title, start, end, o.optString("description", "")))
             }
         }
-        return null
+        return out.sortedBy { it.startEpoch }
     }
 }
 
