@@ -81,22 +81,22 @@ fun TvTab(
         }
     }
 
-    // gorunur kanallarin su anki yayini (kaynak + internet XMLTV yedegi)
-    // Semaphore(6): 40 paralel istek saglayiciyi bogmasin, stabil kalsin
+    // Kanal satirlari: sadece kaynak EPG. Liste kaydirirken arka planda
+    // XML indirip isitma yapmaz; internet yedegi yalnizca rehberde.
     var nowMap by remember { mutableStateOf<Map<String, EpgEntry?>>(emptyMap()) }
     var epgDone by remember { mutableStateOf(false) }
     LaunchedEffect(list, session.sourceId) {
         epgDone = false
         nowMap = emptyMap()
         try {
-            val sem = kotlinx.coroutines.sync.Semaphore(6)
+            val sem = kotlinx.coroutines.sync.Semaphore(3)
             coroutineScope {
-                list.take(25).map { ch ->
+                list.take(12).map { ch ->
                     async(Dispatchers.IO) {
                         sem.acquire()
                         try {
                             val e = try {
-                                EpgXml.lookupNow(ctx, session, ch)
+                                EpgXml.lookupNow(ctx, session, ch, includeInternet = false)
                             } catch (_: Exception) { null }
                             ch.id to e
                         } finally { sem.release() }
@@ -344,18 +344,19 @@ private fun EpgGuide(
     val ctx = LocalContext.current
     var days by remember { mutableStateOf<Map<String, List<EpgEntry>>>(emptyMap()) }
     var guideDone by remember { mutableStateOf(false) }
+    // Rehber kullanici istegiyle acilir: internet yedegi burada serbest (max 8 kanal, 3 paralel)
     LaunchedEffect(list, session.sourceId) {
         guideDone = false
         days = emptyMap()
         try {
-            val sem = kotlinx.coroutines.sync.Semaphore(5)
+            val sem = kotlinx.coroutines.sync.Semaphore(3)
             coroutineScope {
-                list.take(12).map { ch ->
+                list.take(8).map { ch ->
                     async(Dispatchers.IO) {
                         sem.acquire()
                         try {
                             val l = try {
-                                EpgXml.lookupDay(ctx, session, ch)
+                                EpgXml.lookupDay(ctx, session, ch, includeInternet = true)
                             } catch (_: Exception) { emptyList() }
                             ch.id to l
                         } finally { sem.release() }
@@ -373,7 +374,7 @@ private fun EpgGuide(
     val winEnd = winStart + 6 * 3600
     val pxPerSec = 0.55f
     val hScroll = rememberScrollState()
-    val rows = remember(list) { list.take(12) }
+    val rows = remember(list) { list.take(8) }
 
     Column(modifier.verticalScroll(rememberScrollState())) {
         // saat basligi (logo sutunuyla hizali 64dp bosluk)

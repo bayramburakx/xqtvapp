@@ -27,7 +27,8 @@ import java.util.zip.GZIPInputStream
  */
 object EpgXml {
     private const val TTL_MS = 24L * 60 * 60 * 1000
-    private const val MAX_BYTES = 25 * 1024 * 1024
+    // Isinma hotfix: 25MB -> 8MB cap, parse/Gson yazma isi ciddi azalir
+    private const val MAX_BYTES = 8 * 1024 * 1024
     private val gson = Gson()
 
     private val client: OkHttpClient by lazy {
@@ -48,18 +49,27 @@ object EpgXml {
     private val mem = LinkedHashMap<String, Dump>()
     private val type = object : TypeToken<Dump>() {}.type
 
-    /** Yerlesik global listeler (iptv-epg.org, ulke bazli; 404 olanlar sessizce atlanir). */
+    /** Yerlesik listeler: 9 -> 3 (TR/US/UK). Her acilista 9 ayri XML indirip
+     *  parse etmek CPU/bataryayi kavuruyordu; en cok kapsayan 3 liste yeterli. */
     private val BUILTIN = listOf(
         "https://iptv-epg.org/files/epg-tr.xml",
-        "https://iptv-epg.org/files/epg-uk.xml",
         "https://iptv-epg.org/files/epg-us.xml",
-        "https://iptv-epg.org/files/epg-fr.xml",
-        "https://iptv-epg.org/files/epg-de.xml",
-        "https://iptv-epg.org/files/epg-es.xml",
-        "https://iptv-epg.org/files/epg-it.xml",
-        "https://iptv-epg.org/files/epg-ar.xml",
-        "https://iptv-epg.org/files/epg-nl.xml"
+        "https://iptv-epg.org/files/epg-uk.xml"
     )
+
+    // Bulunamayan kanallar icin negatif cache: ayni kanala 6 saat tekrar internet taranmaz
+    private const val MISS_TTL_MS = 6L * 60 * 60 * 1000
+    private val miss = LinkedHashMap<String, Long>()
+    private fun isMiss(key: String): Boolean = synchronized(miss) {
+        val t = miss[key] ?: return false
+        if (System.currentTimeMillis() - t > MISS_TTL_MS) {
+            miss.remove(key); false
+        } else true
+    }
+    private fun markMiss(key: String) = synchronized(miss) {
+        if (miss.size > 500) miss.remove(miss.keys.first())
+        miss[key] = System.currentTimeMillis()
+    }
 
     private val QUALITY = setOf(
         "1080p", "720p", "480p", "576p", "4k", "uhd", "fhd", "hd", "sd",
@@ -92,7 +102,8 @@ object EpgXml {
         return toks.joinToString("")
     }
 
-    /** Denenecek anahtarlar: tam normalize, ulkesiz, ilk anlamli kelime. */
+    /** Denenecek anahtarlar: tam normalize + ulkesiz (max 3). Kelime-bazli
+     *  fuzzy kaldirildi: hem pahali hem yanlis eslesme uretiyordu. */
     private fun candidates(name: String): List<String> {
         val n = normalize(name)
         val st = stripped(name)
@@ -105,33 +116,18 @@ object EpgXml {
             if (cur.endsWith(c) && cur.length > c.length + 2) {
                 cur = cur.dropLast(c.length)
                 if (cur !in out) out.add(cur)
+                break
             }
         }
-        // kelime bazli: en uzun anlamli kelime (>=4 harf)
-        val words = name.lowercase().replace(Regex("[^a-z0-9çğıöşü ]"), " ")
-            .split(Regex("\\s+")).filter { it.length >= 4 }
-        words.sortedByDescending { it.length }.take(2).forEach {
-            val k = normalize(it)
-            if (k.isNotBlank() && k !in out && k.length >= 4) out.add(k)
-        }
-        return out.distinct().take(5)
+        return out.distinct().take(3)
     }
 
+    /** O(1) map lookup. Contains-taramasi kaldirildi: her kanal icin binlerce
+     *  key uzerinde contains calistirmak liste ekranlarinda CPU'yu tavan yaptiriyordu. */
     private fun findLists(byName: Map<String, List<EpgEntry>>, chName: String): List<EpgEntry> {
         if (byName.isEmpty() || chName.isBlank()) return emptyList()
-        val cands = candidates(chName)
-        // 1) birebir
-        for (k in cands) {
+        for (k in candidates(chName)) {
             byName[k]?.takeIf { it.isNotEmpty() }?.let { return it }
-        }
-        // 2) iceren/icerilen (min 4 harf, yanlis eslesmeyi onlemek icin)
-        for (k in cands) {
-            if (k.length < 4) continue
-            for ((key, list) in byName) {
-                if (list.isEmpty()) continue
-                if (key.length < 4) continue
-                if (key.contains(k) || k.contains(key)) return list
-            }
         }
         return emptyList()
     }
@@ -220,7 +216,7 @@ object EpgXml {
             var desc = ""
             var curTag = ""
             var count = 0
-            while (ev != org.xmlpull.v1.XmlPullParser.END_DOCUMENT && count < 80000) {
+            while (ev != org.xmlpull.v1.XmlPullParser.END_DOCUMENT && count < 25000) {
                 when (ev) {
                     org.xmlpull.v1.XmlPullParser.START_TAG -> {
                         when (p.name) {
@@ -239,7 +235,7 @@ object EpgXml {
                         if (inProg) {
                             val tx = p.text ?: ""
                             if (curTag == "title") title += tx
-                            else if (curTag == "desc" && desc.length < 500) desc += tx
+                            else if (curTag == "desc" && desc.length < 200) desc += tx
                         }
                     }
                     org.xmlpull.v1.XmlPullParser.END_TAG -> {
@@ -287,7 +283,7 @@ object EpgXml {
             if (st.isNotBlank() && st != normalize(id)) {
                 byName.getOrPut(st) { mutableListOf() }.addAll(list)
             }
-            byName.getOrPut(id) { mutableListOf() }.addAll(list)
+            // Ham id anahtari kaldirildi: map'i ~1/3 siseriyor, GC/CPU yukuydu
         }
         byName.values.forEach { it.sortBy { e -> e.startEpoch } }
         return Dump(System.currentTimeMillis(), byName)
@@ -367,9 +363,12 @@ object EpgXml {
         return try { FavoritesStore.defaultEpgFlow(ctx).first() } catch (_: Exception) { "" }
     }
 
-    /** Tek kanal icin su anki yayin: kaynak -> ozel URL -> M3U url-tvg -> global. */
+    /** Tek kanal icin su anki yayin: kaynak -> (istenirse) internet.
+     *  includeInternet=false iken sadece kaynak EPG denenir: ana sayfa/liste
+     *  raflari arka planda 9 liste indirip telefonu isitmaz. Rehber/detay true cagirir. */
     suspend fun lookupNow(
-        ctx: Context, session: com.bayram.xqtvapp.Session, ch: StalkerChannel
+        ctx: Context, session: com.bayram.xqtvapp.Session, ch: StalkerChannel,
+        includeInternet: Boolean = true
     ): EpgEntry? {
         // 1) kaynak EPG'si (Xtream)
         if (session.xServer.isNotBlank()) {
@@ -381,6 +380,8 @@ object EpgXml {
                 }
             } catch (_: Exception) { }
         }
+        if (!includeInternet) return null
+        if (isMiss("now:" + ch.name)) return null
         val now = System.currentTimeMillis() / 1000
         // 2) kullanicinin ozel XMLTV adresi
         try {
@@ -400,18 +401,20 @@ object EpgXml {
                 }?.let { return it }
             }
         } catch (_: Exception) { }
-        // 4) yerlesik global listeler (TR + US/UK/EU/AR)
+        // 4) yerlesik global listeler (TR + US/UK)
         try {
             matchBuiltin(ctx, ch.name).firstOrNull {
                 it.startEpoch <= now && now < it.endEpoch
             }?.let { return it }
         } catch (_: Exception) { }
+        markMiss("now:" + ch.name)
         return null
     }
 
     /** Rehber icin gunluk akis (once kaynak, sonra internet). */
     suspend fun lookupDay(
-        ctx: Context, session: com.bayram.xqtvapp.Session, ch: StalkerChannel
+        ctx: Context, session: com.bayram.xqtvapp.Session, ch: StalkerChannel,
+        includeInternet: Boolean = true
     ): List<EpgEntry> {
         if (session.xServer.isNotBlank()) {
             try {
@@ -423,6 +426,8 @@ object EpgXml {
                 }
             } catch (_: Exception) { }
         }
+        if (!includeInternet) return emptyList()
+        if (isMiss("day:" + ch.name)) return emptyList()
         val now = System.currentTimeMillis() / 1000
         try {
             val defUrl = userEpgUrl(ctx)
@@ -442,6 +447,7 @@ object EpgXml {
             val l = matchBuiltin(ctx, ch.name).filter { it.endEpoch > now - 3600 }
             if (l.isNotEmpty()) return l
         } catch (_: Exception) { }
+        markMiss("day:" + ch.name)
         return emptyList()
     }
 }

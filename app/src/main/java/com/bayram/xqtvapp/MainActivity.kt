@@ -731,17 +731,18 @@ private fun LiveRail(
 ) {
     val ctx = LocalContext.current
     var epg by remember { mutableStateOf<Map<String, EpgEntry>>(emptyMap()) }
-    // Kaynakta varsa kaynaktan, yoksa internetten (global + TR). Max 10 kanal, 6 paralel.
+    // Ana sayfa rafi: sadece kaynak EPG (internet yok). Arka planda liste indirip
+    // isitma yapmaz; rehber/oyuncu internet yedegini kullanir.
     LaunchedEffect(session.sourceId) {
         try {
-            val sem = kotlinx.coroutines.sync.Semaphore(6)
+            val sem = kotlinx.coroutines.sync.Semaphore(3)
             coroutineScope {
-                session.channels.take(10).map { ch ->
+                session.channels.take(6).map { ch ->
                     async(Dispatchers.IO) {
                         sem.acquire()
                         try {
                             val e = try {
-                                com.bayram.xqtvapp.data.EpgXml.lookupNow(ctx, session, ch)
+                                com.bayram.xqtvapp.data.EpgXml.lookupNow(ctx, session, ch, includeInternet = false)
                             } catch (_: Exception) { null }
                             ch.id to e
                         } finally { sem.release() }
@@ -1360,7 +1361,7 @@ fun SettingsTab(
                 )
             }
             Spacer(Modifier.height(20.dp))
-            Text("Portio v2.8 • Tüm yayınların tek yerde.",
+            Text("Portio v2.8.1 • Tüm yayınların tek yerde.",
                 color = PTx2, fontSize = 12.sp)
             if (avDialog) {
                 AlertDialog(
