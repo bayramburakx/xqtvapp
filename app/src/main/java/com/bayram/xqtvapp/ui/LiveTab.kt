@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,7 +56,7 @@ private val LiveGold = Color(0xFFFFD60A)
 @Composable
 fun TvTab(
     session: Session,
-    onSearch: () -> Unit,
+    onSearch: (String) -> Unit,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit
 ) {
     val ctx = LocalContext.current
@@ -133,7 +134,7 @@ fun TvTab(
                 Text("${list.size} kanal", color = PTx2, fontSize = 14.sp)
             }
             Box(Modifier.size(38.dp).clip(CircleShape).background(PGlass)
-                .clickableNoRipple(onSearch), contentAlignment = Alignment.Center) {
+                .clickableNoRipple({ onSearch("live") }), contentAlignment = Alignment.Center) {
                 Icon(Icons.Filled.Search, "Ara", tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
@@ -362,99 +363,94 @@ private fun EpgGuide(
     val winStart = (now - 1800) / 3600 * 3600
     val winEnd = winStart + 6 * 3600
     val pxPerSec = 0.55f
+    val hScroll = rememberScrollState()
+    val rows = remember(list) { list.take(12) }
 
-    BoxWithConstraints(modifier.fillMaxWidth()) {
-        val tlWidth = (maxWidth - 64.dp)
-        val scale = tlWidth / (winEnd - winStart).toFloat()
-        Row(Modifier.fillMaxSize()) {
-            // saat sutunu kaymaz; satirlar yatay kayar
-            Column(Modifier.width(64.dp)) {
-                Spacer(Modifier.height(34.dp))
-                list.take(12).forEach { ch ->
-                    Box(Modifier.height(64.dp), contentAlignment = Alignment.Center) {
-                        if (ch.logo.isNotBlank()) {
-                            AsyncImage(model = ch.logo, contentDescription = null,
-                                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)))
-                        } else {
-                            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
-                                .background(tileBrush(ch.id)),
-                                contentAlignment = Alignment.Center) {
-                                Text(initialsOf(ch.name), color = Color.White, fontSize = 12.sp,
-                                    fontWeight = FontWeight.ExtraBold)
-                            }
+    Column(modifier.verticalScroll(rememberScrollState())) {
+        // saat basligi (logo sutunuyla hizali 64dp bosluk)
+        Row {
+            Spacer(Modifier.width(64.dp))
+            Row(Modifier.horizontalScroll(hScroll)) {
+                Box(Modifier.width((((winEnd - winStart) * pxPerSec).dp)).height(34.dp)) {
+                    var hh = winStart
+                    while (hh < winEnd) {
+                        Box(
+                            Modifier.offset(x = ((hh - winStart) * pxPerSec).dp)
+                                .padding(start = 8.dp)
+                        ) {
+                            Text(
+                                SimpleDateFormat("HH:mm", Locale.getDefault())
+                                    .format(Date(hh * 1000)),
+                                fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PTx2
+                            )
                         }
+                        hh += 3600
                     }
                 }
-            }
-            Box(
-                Modifier.weight(1f)
-                    .horizontalScroll(rememberScrollState())
-            ) {
-                val totalW = ((winEnd - winStart) * pxPerSec).dp
-                Column(Modifier.width(totalW)) {
-                    // saat basligi
-                    Box(Modifier.height(34.dp)) {
-                        var t = winStart
-                        while (t < winEnd) {
-                            val left = ((t - winStart) * pxPerSec).dp
-                            Box(Modifier.offset(x = left).padding(start = 8.dp)) {
-                                Text(
-                                    SimpleDateFormat("HH:mm", Locale.getDefault())
-                                        .format(Date(t * 1000)),
-                                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = PTx2
-                                )
-                            }
-                            t += 3600
-                        }
-                    }
-                    list.take(12).forEach { ch ->
-                        val progs = days[ch.id]?.filter { it.endEpoch > winStart && it.startEpoch < winEnd }
-                            ?: emptyList()
-                        Box(Modifier.height(64.dp)) {
-                            if (progs.isEmpty()) {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
-                                    Text(if (!guideDone) "Yükleniyor..." else "Program bilgisi yok",
-                                        color = PTx2, fontSize = 12.sp,
-                                        modifier = Modifier.padding(start = 8.dp))
-                                }
-                            }
-                            progs.forEach { p ->
-                                val left = ((p.startEpoch.coerceAtLeast(winStart) - winStart) * pxPerSec).dp
-                                val durS = (p.endEpoch.coerceAtMost(winEnd) - p.startEpoch.coerceAtLeast(winStart)).coerceAtLeast(0)
-                                val w = ((durS * pxPerSec) - 6).coerceAtLeast(40f).dp
-                                val isNow = p.startEpoch <= now && now < p.endEpoch
-                                Box(
-                                    Modifier.offset(x = left).width(w)
-                                        .padding(vertical = 6.dp).fillMaxHeight()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(if (isNow) Color.White else Color(0xFF15151F))
-                                        .clickableNoRipple {
-                                            if (isNow) onPlay(ch)
-                                            else Toast.makeText(ctx, "Henüz başlamadı", Toast.LENGTH_SHORT).show()
-                                        }
-                                        .padding(10.dp, 0.dp),
-                                    contentAlignment = Alignment.CenterStart
-                                ) {
-                                    Column {
-                                        Text(p.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                                            color = if (isNow) Color.Black else Color.White,
-                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(p.range(), fontSize = 11.sp,
-                                            color = if (isNow) Color.Black.copy(alpha = 0.7f) else PTx2,
-                                            maxLines = 1)
-                                    }
-                                }
-                            }
-                        }
-                        HorizontalDivider(color = PLine)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-                // simdi cizgisi
-                val nowX = ((now - winStart) * pxPerSec).dp
-                Box(Modifier.offset(x = nowX).width(2.dp).fillMaxHeight()
-                    .background(PLive))
             }
         }
+        rows.forEach { ch ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.width(64.dp).height(64.dp), contentAlignment = Alignment.Center) {
+                    if (ch.logo.isNotBlank()) {
+                        AsyncImage(model = ch.logo, contentDescription = null,
+                            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)))
+                    } else {
+                        Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp))
+                            .background(tileBrush(ch.id)),
+                            contentAlignment = Alignment.Center) {
+                            Text(initialsOf(ch.name), color = Color.White, fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
+                Row(Modifier.weight(1f).horizontalScroll(hScroll)) {
+                    Box(Modifier.width(((winEnd - winStart) * pxPerSec).dp).height(64.dp)) {
+                        val progs = (days[ch.id] ?: emptyList())
+                            .filter { it.endEpoch > winStart && it.startEpoch < winEnd }
+                        if (progs.isEmpty()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                                Text(if (!guideDone) "Yükleniyor..." else "Program bilgisi yok",
+                                    color = PTx2, fontSize = 12.sp,
+                                    modifier = Modifier.padding(start = 8.dp))
+                            }
+                        }
+                        progs.forEach { pr ->
+                            val left = ((pr.startEpoch.coerceAtLeast(winStart) - winStart) * pxPerSec).dp
+                            val durS = (pr.endEpoch.coerceAtMost(winEnd) - pr.startEpoch.coerceAtLeast(winStart)).coerceAtLeast(0)
+                            val w = ((durS * pxPerSec) - 6).coerceAtLeast(40f).dp
+                            val isNow = pr.startEpoch <= now && now < pr.endEpoch
+                            Box(
+                                Modifier.offset(x = left).width(w)
+                                    .padding(vertical = 6.dp).fillMaxHeight()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isNow) Color.White else Color(0xFF15151F))
+                                    .clickableNoRipple {
+                                        if (isNow) onPlay(ch)
+                                        else Toast.makeText(ctx, "Henüz başlamadı", Toast.LENGTH_SHORT).show()
+                                    }
+                                    .padding(10.dp, 0.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Column {
+                                    Text(pr.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                        color = if (isNow) Color.Black else Color.White,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(pr.range(), fontSize = 11.sp,
+                                        color = if (isNow) Color.Black.copy(alpha = 0.7f) else PTx2,
+                                        maxLines = 1)
+                                }
+                            }
+                        }
+                        // simdi cizgisi
+                        val nowX = ((now - winStart) * pxPerSec).dp
+                        Box(Modifier.offset(x = nowX).width(2.dp).fillMaxHeight()
+                            .background(PLive))
+                    }
+                }
+            }
+            HorizontalDivider(color = PLine)
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }
