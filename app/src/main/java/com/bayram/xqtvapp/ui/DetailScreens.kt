@@ -459,6 +459,7 @@ fun SeriesDetailScreen(
                     }
                 }
             }
+            }
             items(eps, key = { it.id }) { ep ->
                 val idx = allEps.indexOfFirst { it.id == ep.id }
                 val wid = "series_" + ep.id
@@ -579,8 +580,6 @@ fun SeriesDetailScreen(
                 }
             }
             item { Spacer(Modifier.height(24.dp)) }
-                }
-            }
         }
 
         if (showMini) {
