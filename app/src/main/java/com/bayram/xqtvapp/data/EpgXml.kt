@@ -61,7 +61,19 @@ object EpgXml {
                 .build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful && resp.code != 206) return null
-                val head = resp.body?.byteStream()?.use { it.readBytes(65536) } ?: return null
+                val stream = resp.body?.byteStream() ?: return null
+                val head = stream.use {
+                    val out = java.io.ByteArrayOutputStream()
+                    val buf = ByteArray(8192)
+                    var total = 0
+                    while (total < 65536) {
+                        val n = it.read(buf, 0, minOf(buf.size, 65536 - total))
+                        if (n < 0) break
+                        total += n
+                        out.write(buf, 0, n)
+                    }
+                    out.toByteArray()
+                }
                 val text = head.toString(Charsets.UTF_8)
                 Regex("""url-tvg="([^"]+)"""").find(text)?.groupValues?.get(1)
                     ?: Regex("""x-tvg-url="([^"]+)"""").find(text)?.groupValues?.get(1)
@@ -79,7 +91,7 @@ object EpgXml {
                 if (!resp.isSuccessful) return null
                 val body = resp.body ?: return null
                 val isGzip = url.endsWith(".gz") ||
-                        resp.header("Content-Encoding", "").contains("gzip", true)
+                        (resp.header("Content-Encoding") ?: "").contains("gzip", true)
                 val stream = if (isGzip) GZIPInputStream(body.byteStream()) else body.byteStream()
                 stream.use {
                     val out = java.io.ByteArrayOutputStream()
@@ -146,7 +158,7 @@ object EpgXml {
                                 stop > minS && start < maxS && start < stop
                             ) {
                                 out.getOrPut(ch) { mutableListOf() }
-                                    .add(EpgEntry(title.trim(), start, stop, desc.trim()))
+                                    .add(EpgEntry(title.trim(), start, stop))
                                 count++
                             }
                         }
