@@ -129,6 +129,7 @@ data class Session(
     val xServer: String = "",
     val xUser: String = "",
     val xPass: String = "",
+    val m3uUrl: String = "",
     val sourceId: String = "",
     val sourceName: String = ""
 )
@@ -150,7 +151,8 @@ data class PlayReq(
     val xUser: String = "",
     val xPass: String = "",
     val stalkerUrl: String = "",
-    val stalkerMac: String = ""
+    val stalkerMac: String = "",
+    val m3uUrl: String = ""
 )
 
 private sealed interface Root {
@@ -196,7 +198,8 @@ fun AppNav() {
         play = PlayReq(ch.name, url, alt, isLive = true, resumeId = ch.id, headers = headers,
             zap = zap, zapIndex = zapIdx,
             xServer = s?.xServer ?: "", xUser = s?.xUser ?: "", xPass = s?.xPass ?: "",
-            stalkerUrl = s?.stalkerUrl ?: "", stalkerMac = s?.stalkerMac ?: "")
+            stalkerUrl = s?.stalkerUrl ?: "", stalkerMac = s?.stalkerMac ?: "",
+            m3uUrl = s?.m3uUrl ?: "")
     }
 
     fun openMoviePlay(movie: StalkerChannel, url: String, startMs: Long = 0L, headers: Map<String, String> = emptyMap()) {
