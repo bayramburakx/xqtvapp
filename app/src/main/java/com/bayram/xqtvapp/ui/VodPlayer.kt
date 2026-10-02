@@ -119,7 +119,11 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
 
     DisposableEffect(Unit) {
         view.keepScreenOn = true
-        onDispose { view.keepScreenOn = false }
+        PlayerBackend.immersive(view, true)
+        onDispose {
+            view.keepScreenOn = false
+            PlayerBackend.immersive(view, false)
+        }
     }
     LaunchedEffect(subSizePref) {
         subSizeIdx = subSizePref
@@ -294,8 +298,7 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        // arka plan emaneti (video yuklenmeden once)
-        Box(Modifier.fillMaxSize().background(tileBrush(req.title.ifBlank { req.url })))
+        // mektup kutusu alanlari saf siyah (arka plan deseni yok)
 
         if (exo != null) {
             AndroidView(
@@ -307,7 +310,10 @@ fun VodPlayerScreen(req: PlayReq, onBack: () -> Unit) {
                         playerView = it
                     }
                 },
-                update = { it.resizeMode = RESIZE_MODES[resizeIdx] },
+                update = {
+                    it.player = exo
+                    it.resizeMode = RESIZE_MODES[resizeIdx]
+                },
                 modifier = Modifier.fillMaxSize()
             )
         }
