@@ -158,6 +158,7 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
     var dayEpg by remember { mutableStateOf<List<EpgEntry>>(emptyList()) }
     val hiddenFr = remember { FocusRequester() }
     val playFr = remember { FocusRequester() }
+    var uiFocusGiven by remember { mutableStateOf(false) }
 
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
     val chId = currentCh?.id ?: req.resumeId
