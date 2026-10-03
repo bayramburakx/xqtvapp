@@ -236,4 +236,33 @@ object FavoritesStore {
     suspend fun replaceHiddenCats(ctx: Context, next: Set<String>) {
         ctx.dataStore.edit { it[KEY_HIDDEN_CATS] = next.joinToString(RS) }
     }
+
+    // ---------- ulke atama (yanlis eslesen kategoriyi elle duzeltme) ----------
+    // Format: "tur||hamAd=CC;..."  (tur: live|movie|series)
+    private val KEY_CAT_COUNTRY = stringPreferencesKey("cat_country_v1")
+    private const val CS = ";"
+    private const val KV = "="
+
+    fun catCountryFlow(ctx: Context): Flow<Map<String, String>> =
+        ctx.dataStore.data.map { prefs ->
+            (prefs[KEY_CAT_COUNTRY] ?: "").split(CS).mapNotNull { e ->
+                val i = e.indexOf(KV)
+                if (i < 0) null
+                else e.substring(0, i).takeIf { it.isNotBlank() }?.let { k ->
+                    k to e.substring(i + 1).trim().takeIf { it.isNotEmpty() }
+                }
+            }.filter { it.second != null }.associate { it.first to it.second!! }
+        }
+
+    suspend fun setCatCountry(ctx: Context, kind: String, raw: String, code: String) {
+        val k = "$kind||$raw"
+        ctx.dataStore.edit { p ->
+            val cur = (p[KEY_CAT_COUNTRY] ?: "").split(CS).mapNotNull { e ->
+                val i = e.indexOf(KV)
+                if (i < 0) null else e.substring(0, i) to e.substring(i + 1)
+            }.toMap().toMutableMap()
+            cur[k] = code
+            p[KEY_CAT_COUNTRY] = cur.entries.joinToString(CS) { it.key + KV + it.value }
+        }
+    }
 }

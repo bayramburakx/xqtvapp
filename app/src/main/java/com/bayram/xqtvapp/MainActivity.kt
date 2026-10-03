@@ -54,7 +54,11 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import coil.compose.AsyncImage
 import com.bayram.xqtvapp.data.ContentCache
+import com.bayram.xqtvapp.data.CountryGroup
+import com.bayram.xqtvapp.data.COUNTRIES
+import com.bayram.xqtvapp.data.countryDef
 import com.bayram.xqtvapp.data.EpgCache
+import com.bayram.xqtvapp.data.groupByCountry
 import com.bayram.xqtvapp.data.EpgEntry
 import com.bayram.xqtvapp.data.EpisodeEntry
 import com.bayram.xqtvapp.data.FavoritesStore
@@ -1413,7 +1417,7 @@ fun SettingsTab(
                 )
             }
             Spacer(Modifier.height(20.dp))
-            Text("Portio v2.8.5 • Tüm yayınların tek yerde.",
+            Text("Portio v2.8.6 • Tüm yayınların tek yerde.",
                 color = PTx2, fontSize = 12.sp)
             if (avDialog) {
                 AlertDialog(
@@ -1454,163 +1458,371 @@ fun SettingsTab(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun CategoriesScreen(session: Session, onClose: () -> Unit) {
     BackHandler { onClose() }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val hidden by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
+    val overrides by FavoritesStore.catCountryFlow(ctx).collectAsState(initial = emptyMap())
+    var tab by remember { mutableIntStateOf(0) } // 0 canli, 1 film, 2 dizi
     var q by remember { mutableStateOf("") }
+    var open by remember { mutableStateOf(setOf<String>()) }
+    var assign by remember { mutableStateOf<Triple<String, String, String>?>(null) } // tur, hamAd, etiket
 
-    data class Kind(
-        val key: String, val title: String,
-        val cats: List<Pair<String, Int>>
-    )
-    val kinds = remember(session) {
+    data class KindTab(val key: String, val title: String, val unit: String, val cats: List<Pair<String, Int>>)
+    val tabs = remember(session) {
         listOf(
-            Kind("live", "Canlı TV",
+            KindTab("live", "Canlı TV", "kanal",
                 session.channels.groupBy { it.genre }.map { (k, v) -> k to v.size }.sortedBy { it.first }),
-            Kind("movie", "Filmler",
+            KindTab("movie", "Filmler", "film",
                 session.movies.groupBy { it.genre }.map { (k, v) -> k to v.size }.sortedBy { it.first }),
-            Kind("series", "Diziler",
+            KindTab("series", "Diziler", "dizi",
                 session.series.groupBy { it.category }.map { (k, v) -> k to v.size }.sortedBy { it.first })
         )
     }
-    val allKeys = remember(kinds) { kinds.flatMap { k -> k.cats.map { (n, _) -> "${k.key}:$n" } }.toSet() }
-    // Arama: uc bolumde birden suzer
-    val shown = remember(kinds, q) {
-        val t = q.trim()
-        if (t.isBlank()) kinds
-        else kinds.map { k -> k.copy(cats = k.cats.filter { (n, _) -> n.contains(t, true) }) }
+    val allKeys = remember(tabs) {
+        tabs.flatMap { t -> t.cats.map { (n, _) -> "${t.key}:$n" } }.toSet()
     }
-    val matchCount = remember(shown) { shown.sumOf { it.cats.size } }
+    val groupsAll = remember(tabs, overrides) {
+        tabs.map { t -> groupByCountry(t.key, t.cats, overrides) }
+    }
+    val cur = tabs[tab]
+    // Sekme degisince ilk ulkeyi acik getir
+    LaunchedEffect(tab) {
+        open = groupsAll[tab].firstOrNull()?.code?.let { setOf(it) } ?: emptySet()
+    }
+    fun isOn(key: String) = !hidden.contains(key)
 
-    fun setAll(hide: Boolean) {
-        scope.launch {
-            FavoritesStore.replaceHiddenCats(
-                ctx, if (hide) allKeys else emptySet()
-            )
+    // Arama: ulke adi/kodu ya da alt kategori tutarsa goster
+    val qt = q.trim()
+    val groups = remember(groupsAll, tab, qt) {
+        val g = groupsAll[tab]
+        if (qt.isBlank()) g
+        else g.mapNotNull { cg ->
+            val def = countryDef(cg.code)
+            if ((def.trName + " " + def.code).contains(qt, true)) cg
+            else {
+                val subs = cg.subs.filter { s ->
+                    s.label.contains(qt, true) || s.raws.any { it.contains(qt, true) }
+                }
+                if (subs.isEmpty()) null else cg.copy(subs = subs)
+            }
+        }
+    }
+
+    // Alt bar istatistikleri (3 sekme toplam): secili ulke + gorunur icerik
+    val selCountries = remember(groupsAll, hidden) {
+        groupsAll.flatMap { gl -> gl.filter { cg -> cg.subs.any { s -> s.keys.any { isOn(it) } } } }
+            .map { it.code } }.toSet()
+    }
+    val visTotals = remember(groupsAll, hidden, tabs) {
+        tabs.mapIndexed { i, t ->
+            groupsAll[i].sumOf { cg ->
+                cg.subs.filter { s -> s.keys.any { isOn(it) } }.sumOf { it.count }
+            } to t.unit
         }
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
-        contentPadding = PaddingValues(20.dp, 18.dp, 20.dp, 110.dp)
-    ) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(38.dp).clip(CircleShape).background(PGlass)
-                    .clickableNoRipple(onClose), contentAlignment = Alignment.Center) {
-                    Text("‹", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Kategoriler", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = (-1.5).sp)
-                    Text(
-                        if (hidden.isEmpty()) "Tümü görünür"
-                        else "${hidden.size} kategori gizli",
-                        color = PTx2, fontSize = 14.sp
-                    )
-                }
-            }
-            Spacer(Modifier.height(14.dp))
-            // Arama (uygulamadaki diger arama alanlariyla ayni stil)
-            OutlinedTextField(
-                value = q, onValueChange = { q = it },
-                placeholder = { Text("Kategori ara...", color = PTx2, fontSize = 14.sp) },
-                leadingIcon = {
-                    Icon(Icons.Filled.Search, "Ara", tint = PTx2, modifier = Modifier.size(18.dp))
-                },
-                trailingIcon = {
-                    if (q.isNotEmpty()) {
-                        TextButton(onClick = { q = "" }) { Text("Temizle", color = PTx2, fontSize = 13.sp) }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedContainerColor = PBg2, focusedContainerColor = PBg2,
-                    unfocusedBorderColor = PLine, focusedBorderColor = PAcc1
-                )
-            )
-            Spacer(Modifier.height(10.dp))
-            // Toplu islem: 5 kategori de 500 kategori de iki dokunus
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(
-                    onClick = { setAll(true) },
-                    enabled = hidden.size < allKeys.size,
-                    shape = RoundedCornerShape(99.dp),
-                    modifier = Modifier.weight(1f).height(48.dp)
-                ) { Text("Tümünü kapat", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
-                Button(
-                    onClick = { setAll(false) },
-                    enabled = hidden.isNotEmpty(),
-                    shape = RoundedCornerShape(99.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                    modifier = Modifier.weight(1f).height(48.dp)
-                ) { Text("Tümünü aç", color = Color.Black, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
-            }
-        }
-        if (q.isNotBlank() && matchCount == 0) {
+    fun toast(m: String) {
+        Toast.makeText(ctx, m, Toast.LENGTH_SHORT).show()
+    }
+
+    Box(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(20.dp, 18.dp, 20.dp, 180.dp)
+        ) {
             item {
-                Text("Sonuç yok.", color = PTx2, fontSize = 15.sp,
-                    modifier = Modifier.padding(vertical = 18.dp))
+                Text("‹ Ayarlar", color = Color(0xFF4AA3FF), fontSize = 17.sp,
+                    modifier = Modifier.clickableNoRipple(onClose).padding(vertical = 8.dp))
+                Text("Ülke ve kategoriler", fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-1.5).sp, modifier = Modifier.padding(4.dp, 4.dp, 4.dp, 8.dp))
+                val totCats = tabs.sumOf { it.cats.size }
+                Text(
+                    "Kaynağında $totCats kategori var. Sadece izlemek istediklerini aç, " +
+                        "gerisi uygulamada gizlenir.",
+                    color = PTx2, fontSize = 14.sp, lineHeight = 20.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+                Spacer(Modifier.height(14.dp))
+                // 3'lu tab (Kanallar/Rehber segmesiyle ayni dil)
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(99.dp)).background(PGlass).padding(4.dp)
+                ) {
+                    tabs.forEachIndexed { i, t ->
+                        Box(
+                            Modifier.weight(1f).height(38.dp)
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(if (tab == i) Color.White else Color.Transparent)
+                                .clickableNoRipple { tab = i },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(t.title, color = if (tab == i) Color.Black else PTx2,
+                                fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = q, onValueChange = { q = it },
+                    placeholder = { Text("Ülke veya kategori ara", color = PTx2, fontSize = 14.sp) },
+                    leadingIcon = {
+                        Icon(Icons.Filled.Search, "Ara", tint = PTx2, modifier = Modifier.size(18.dp))
+                    },
+                    trailingIcon = {
+                        if (q.isNotEmpty()) {
+                            TextButton(onClick = { q = "" }) { Text("Temizle", color = PTx2, fontSize = 13.sp) }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedContainerColor = PBg2, focusedContainerColor = PBg2,
+                        unfocusedBorderColor = PLine, focusedBorderColor = PAcc1
+                    )
+                )
+                Spacer(Modifier.height(12.dp))
+                // Hizli cipler: Sadece ABD / Sadece Turkiye / Tumunu sec / Temizle
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        "Sadece ABD" to { onlyCountry("US", groupsAll, allKeys, ctx, scope) },
+                        "Sadece Türkiye" to { onlyCountry("TR", groupsAll, allKeys, ctx, scope) },
+                        "Tümünü seç" to {
+                            scope.launch { FavoritesStore.replaceHiddenCats(ctx, emptySet()) }
+                        },
+                        "Temizle" to {
+                            scope.launch { FavoritesStore.replaceHiddenCats(ctx, allKeys) }
+                        }
+                    ).forEach { (label, fn) ->
+                        OutlinedButton(
+                            onClick = fn,
+                            shape = RoundedCornerShape(99.dp),
+                            modifier = Modifier.height(34.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+                        ) { Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
             }
-        }
-        shown.forEach { kind ->
-            if (kind.cats.isNotEmpty()) {
+            if (groups.isEmpty()) {
                 item {
-                    // Baslik sayfa basligiyla hizali (hPad=0, izgara disi 20dp padding icinde)
-                    val openN = kind.cats.count { (n, _) -> !hidden.contains("${kind.key}:$n") }
-                    val allOpen = openN == kind.cats.size
-                    SectionHead(
-                        kind.title, openN,
-                        if (allOpen) "Kapat" else "Aç", hPad = 0.dp,
-                        onAction = {
-                            scope.launch {
-                                val keys = kind.cats.map { (n, _) -> "${kind.key}:$n" }.toSet()
-                                FavoritesStore.replaceHiddenCats(
-                                    ctx,
-                                    if (allOpen) hidden + keys else hidden - keys
-                                )
+                    Text("Eşleşen ülke veya kategori yok.", color = PTx2, fontSize = 15.sp,
+                        modifier = Modifier.padding(vertical = 24.dp))
+                }
+            }
+            groups.forEach { cg ->
+                val def = countryDef(cg.code)
+                val onSubs = cg.subs.count { s -> s.keys.all { isOn(it) } }
+                val state = when {
+                    onSubs == 0 -> 0
+                    onSubs == cg.subs.size -> 2
+                    else -> 1
+                }
+                val visCount = cg.subs.filter { s -> s.keys.any { isOn(it) } }.sumOf { it.count }
+                item(key = cur.key + cg.code) {
+                    Card(
+                        shape = RoundedCornerShape(22.dp),
+                        colors = CardDefaults.cardColors(containerColor = PGlass),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, PLine),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                    ) {
+                        Column {
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .clickableNoRipple {
+                                        open = if (open.contains(cg.code)) open - cg.code else open + cg.code
+                                    }
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(def.flag, fontSize = 28.sp,
+                                    modifier = Modifier.width(34.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(def.trName, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                                        letterSpacing = (-0.3).sp)
+                                    Text("$onSubs/${cg.subs.size} kategori · $visCount ${cur.unit}",
+                                        color = PTx2, fontSize = 12.sp)
+                                }
+                                TriToggle(state) {
+                                    scope.launch {
+                                        val keys = cg.subs.flatMap { it.keys }.toSet()
+                                        FavoritesStore.replaceHiddenCats(
+                                            ctx,
+                                            if (state == 2) hidden + keys else hidden - keys
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Text(if (open.contains(cg.code)) "﹀" else "›",
+                                    color = PTx2, fontSize = 18.sp)
+                            }
+                            if (open.contains(cg.code)) {
+                                HorizontalDivider(color = PLine)
+                                cg.subs.forEach { s ->
+                                    val subOn = s.keys.all { isOn(it) }
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(14.dp, 11.dp, 14.dp, 11.dp)
+                                            .padding(start = 46.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(s.label, fontSize = 15.sp,
+                                                fontWeight = FontWeight.Medium)
+                                            Text(
+                                                s.raws.joinToString(" · ").take(60),
+                                                color = PTx2, fontSize = 11.sp,
+                                                maxLines = 1, overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        if (cg.code == "XX") {
+                                            TextButton(
+                                                onClick = {
+                                                    assign = Triple(cur.key, s.raws.first(), s.label)
+                                                }
+                                            ) { Text("Ülke ata", fontSize = 12.sp) }
+                                        } else {
+                                            Text("${s.count}", color = PTx2, fontSize = 13.sp,
+                                                modifier = Modifier.padding(end = 10.dp))
+                                        }
+                                        Switch(
+                                            checked = subOn,
+                                            onCheckedChange = {
+                                                scope.launch {
+                                                    FavoritesStore.replaceHiddenCats(
+                                                        ctx,
+                                                        if (subOn) hidden + s.keys else hidden - s.keys.toSet()
+                                                    )
+                                                }
+                                            }
+                                        )
+                                    }
+                                    HorizontalDivider(color = PLine,
+                                        modifier = Modifier.padding(start = 60.dp))
+                                }
                             }
                         }
-                    )
-                }
-                item {
-                    // Uygulamadaki cip dili: acik = beyaz, gizli = soluk cam
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        kind.cats.forEach { (name, count) ->
-                            val key = "${kind.key}:$name"
-                            val visible = !hidden.contains(key)
-                            FilterChip(
-                                selected = visible,
-                                onClick = {
-                                    scope.launch {
-                                        FavoritesStore.setCatHidden(ctx, key, visible)
-                                    }
-                                },
-                                label = { Text("$name · $count") },
-                                shape = RoundedCornerShape(99.dp),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color.White,
-                                    selectedLabelColor = Color.Black,
-                                    containerColor = PGlass,
-                                    labelColor = PTx2
-                                )
-                            )
-                        }
                     }
-                    Spacer(Modifier.height(14.dp))
                 }
             }
         }
+        // Alt bar: istatistik + Uygula
+        Row(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .background(Color(0xF214141D))
+                .padding(18.dp, 14.dp, 18.dp, 20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (selCountries.isEmpty()) "Hiçbir şey seçili değil"
+                    else "${selCountries.size} ülke seçili",
+                    fontSize = 16.sp, fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Canlı ${visTotals.getOrNull(0)?.first ?: 0} · " +
+                        "Film ${visTotals.getOrNull(1)?.first ?: 0} · " +
+                        "Dizi ${visTotals.getOrNull(2)?.first ?: 0}",
+                    color = PTx2, fontSize = 12.sp
+                )
+            }
+            Button(
+                onClick = {
+                    if (selCountries.isEmpty()) toast("En az bir kategori seç")
+                    else {
+                        toast("Filtre uygulandı · ${selCountries.size} ülke")
+                        onClose()
+                    }
+                },
+                shape = RoundedCornerShape(99.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                modifier = Modifier.height(50.dp),
+                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 0.dp)
+            ) { Text("Uygula", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+        }
+    }
+    // Ulke ata sayfasi
+    if (assign != null) {
+        val (kind, raw, label) = assign!!
+        ModalBottomSheet(
+            onDismissRequest = { assign = null },
+            containerColor = PBg2,
+            dragHandle = {
+                Box(Modifier.padding(10.dp).width(40.dp).height(5.dp)
+                    .clip(RoundedCornerShape(9.dp)).background(PLine))
+            }
+        ) {
+            Column(Modifier.padding(horizontal = 22.dp).padding(bottom = 24.dp)) {
+                Text("Ülke ata", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+                Text("“$label” hangi ülkeye ait? Atama kaydedilir, liste yenilense de değişmez.",
+                    color = PTx2, fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+                COUNTRIES.filter { it.code != "XX" }.forEach { c ->
+                    Row(
+                        Modifier.fillMaxWidth().clickableNoRipple {
+                            scope.launch {
+                                FavoritesStore.setCatCountry(ctx, kind, raw, c.code)
+                                assign = null
+                                toast("“$label” → ${c.trName}")
+                            }
+                        }.padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(c.flag, fontSize = 24.sp, modifier = Modifier.width(36.dp))
+                        Text(c.trName, fontSize = 16.sp)
+                    }
+                    HorizontalDivider(color = PLine)
+                }
+            }
+        }
+    }
+}
+
+/** "Sadece ABD / Sadece Turkiye": 3 sekmede birden yalnizca o ulke acik kalir. */
+private fun onlyCountry(
+    code: String,
+    groupsAll: List<List<CountryGroup>>,
+    allKeys: Set<String>,
+    ctx: android.content.Context,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
+    scope.launch {
+        val keep = groupsAll.flatMap { gl ->
+            gl.firstOrNull { it.code == code }?.subs?.flatMap { it.keys } ?: emptyList()
+        }.toSet()
+        FavoritesStore.replaceHiddenCats(ctx, allKeys - keep)
+    }
+}
+
+@Composable
+private fun TriToggle(state: Int, onClick: () -> Unit) {
+    // 0 kapali, 1 yarim, 2 acik (tasarimdaki yesil uc durumlu anahtar)
+    val bg = when (state) {
+        2 -> POk
+        1 -> POk.copy(alpha = 0.5f)
+        else -> Color(0xFF787880).copy(alpha = 0.55f)
+    }
+    val frac = when (state) {
+        2 -> 1f
+        1 -> 0.5f
+        else -> 0f
+    }
+    Box(
+        Modifier.size(46.dp, 28.dp).clip(CircleShape).background(bg)
+            .clickableNoRipple(onClick),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Box(
+            Modifier.padding(start = 2.dp).offset(x = (18 * frac).dp)
+                .size(24.dp).clip(CircleShape).background(Color.White)
+        )
     }
 }
 
