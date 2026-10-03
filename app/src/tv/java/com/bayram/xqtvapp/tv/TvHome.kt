@@ -142,7 +142,7 @@ fun TvHomeScreen(
             playLastDone = true
             val last = recents.firstOrNull { resumeMap[it.id]?.kind == "live" }
             val ch = last?.let { l -> vis.channels.find { it.id == l.id } }
-            if (ch != null) openTvLive(scope, vis, ch, vis.channels.indexOf(ch), onPlayChannel)
+            if (ch != null) openTvLive(scope, vis, ch, vis.channels, vis.channels.indexOf(ch), onPlayChannel)
         }
     }
     LaunchedEffect(Unit) {
@@ -244,20 +244,25 @@ fun openTvLive(
     scope: kotlinx.coroutines.CoroutineScope,
     session: Session,
     ch: StalkerChannel,
+    zap: List<StalkerChannel>,
     idx: Int,
     onPlayChannel: (StalkerChannel, String, String?, Map<String, String>, List<StalkerChannel>, Int) -> Unit
 ) {
+    // idx her zaman zap listesindeki konumdur; kategori listesinden acilip
+    // tum listede zap yapma (bambaska kanal acma) hatasi boyle onlenir.
+    val z = if (zap.any { it.id == ch.id }) zap else listOf(ch)
+    val i = z.indexOfFirst { it.id == ch.id }.takeIf { it >= 0 } ?: 0
     scope.launch {
         try {
             if (session.stalkerUrl.isNotEmpty()) {
                 val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
                 val url = sc.createLink(ch.cmd)
-                if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders(), session.channels, idx)
+                if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders(), z, i)
             } else {
                 val headers = if (session.xServer.isNotBlank())
                     mapOf("Referer" to session.xServer.trimEnd('/') + "/") else emptyMap()
                 val alt = if (ch.cmd.endsWith(".m3u8")) ch.cmd.dropLast(5) + ".ts" else null
-                onPlayChannel(ch, ch.cmd, alt, headers, session.channels, idx)
+                onPlayChannel(ch, ch.cmd, alt, headers, z, i)
             }
         } catch (_: Exception) { }
     }
@@ -277,6 +282,7 @@ private fun TvDiscoverTab(
     val recents by FavoritesStore.recentFlow(ctx).collectAsState(initial = emptyList())
     val resumeMap by FavoritesStore.resumeFlow(ctx).collectAsState(initial = emptyMap())
     var epg by remember { mutableStateOf<Map<String, EpgEntry>>(emptyMap()) }
+    val discoverListState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     // Canli ray EPG: sadece kaynak (isinma yok)
     LaunchedEffect(vis.sourceId) {
@@ -313,7 +319,7 @@ private fun TvDiscoverTab(
         }
         vis.channels.take(1).forEach { c ->
             out.add(TvHeroSlide("Canlı", c.name, c.genre, c.logo, {
-                openTvLive(scope, vis, c, vis.channels.indexOf(c), onPlayChannel)
+                openTvLive(scope, vis, c, vis.channels, vis.channels.indexOf(c), onPlayChannel)
             }, c.id))
         }
         out
@@ -321,11 +327,14 @@ private fun TvDiscoverTab(
 
     LazyColumn(
         Modifier.fillMaxSize(),
+        state = discoverListState,
         contentPadding = PaddingValues(start = 40.dp, end = 40.dp, bottom = 50.dp)
     ) {
         if (slides.isNotEmpty()) {
             item {
-                TvHeroSlider(slides = slides)
+                TvHeroSlider(slides = slides, onTopFocus = {
+                    scope.launch { discoverListState.animateScrollToItem(0) }
+                })
             }
         }
         if (recents.isNotEmpty()) {
@@ -340,7 +349,7 @@ private fun TvDiscoverTab(
                                 ?: vis.movies.find { m -> m.id == r.id }
                             if (ch != null) {
                                 if (vis.movies.any { m -> m.id == ch.id }) onOpenMovie(ch)
-                                else openTvLive(scope, vis, ch, vis.channels.indexOf(ch), onPlayChannel)
+                                else openTvLive(scope, vis, ch, vis.channels, vis.channels.indexOf(ch), onPlayChannel)
                             }
                         }
                     }
@@ -353,7 +362,7 @@ private fun TvDiscoverTab(
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     items(vis.channels.take(12), key = { it.id }) { ch ->
                         TvLiveCard(ch, epg[ch.id]) {
-                            openTvLive(scope, vis, ch, vis.channels.indexOf(ch), onPlayChannel)
+                            openTvLive(scope, vis, ch, vis.channels, vis.channels.indexOf(ch), onPlayChannel)
                         }
                     }
                 }
@@ -398,7 +407,7 @@ private data class TvHeroSlide(
 /** Devasa hero slider: fon posteri + otomatik donme + nokta gostergesi. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TvHeroSlider(slides: List<TvHeroSlide>) {
+private fun TvHeroSlider(slides: List<TvHeroSlide>, onTopFocus: () -> Unit) {
     if (slides.isEmpty()) return
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -461,7 +470,8 @@ private fun TvHeroSlider(slides: List<TvHeroSlide>) {
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(18.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        TvButton("▶  Oynat", primary = true, onClick = s.play)
+                        TvButton("▶  Oynat", primary = true, onClick = s.play,
+                            onFocused = { if (it) onTopFocus() })
                         TvButton(
                             if (s.favId != null && favs.contains(s.favId)) "✓ Listemde" else "+ Listem",
                             primary = false,
@@ -682,7 +692,7 @@ private fun TvLiveTab(
                             .background(Color(0xFF15151F))
                             .border(1.dp, PLine, RoundedCornerShape(18.dp))
                             .tvClickableNoRipple {
-                                openTvLive(scope, vis, ch, idx, onPlayChannel)
+                                openTvLive(scope, vis, ch, list, idx, onPlayChannel)
                             }
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -749,7 +759,7 @@ private fun TvLiveTab(
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         TvButton("▶  Oynat", primary = true, onClick = {
-                            openTvLive(scope, vis, ch, list.indexOf(ch), onPlayChannel)
+                            openTvLive(scope, vis, ch, list, list.indexOf(ch), onPlayChannel)
                         })
                         TvStarBtn(
                             filled = favs.contains(ch.id),

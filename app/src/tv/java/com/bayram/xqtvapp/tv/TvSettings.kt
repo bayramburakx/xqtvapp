@@ -355,8 +355,8 @@ private fun TvLockPanel() {
 private fun TvAboutPanel() {
     val ctx = LocalContext.current
     Column(Modifier.verticalScroll(rememberScrollState())) {
-        TvSettingRow(title = "Sürüm", value = "2.9.3 TV", onClick = {
-            tvToast(ctx, "Portio TV 2.9.3")
+        TvSettingRow(title = "Sürüm", value = "2.9.4 TV", onClick = {
+            tvToast(ctx, "Portio TV 2.9.4")
         })
         TvSettingRow(title = "Lisanslar ve gizlilik", value = "", onClick = {
             tvToast(ctx, "Portio TV · Tüm yayınların tek yerde")
@@ -383,6 +383,7 @@ fun TvMovieDetail(
     var detail by remember { mutableStateOf<VodDetail?>(null) }
     var busy by remember { mutableStateOf(false) }
     val playFr = remember { FocusRequester() }
+    val detailListState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     LaunchedEffect(movie.id) {
         detail = null
@@ -418,6 +419,7 @@ fun TvMovieDetail(
     Box(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         LazyColumn(
             Modifier.fillMaxSize(),
+            state = detailListState,
             contentPadding = PaddingValues(start = 40.dp, end = 40.dp, top = 40.dp, bottom = 50.dp)
         ) {
             item {
@@ -460,6 +462,9 @@ fun TvMovieDetail(
                     TvButton(
                         if (busy) "Açılıyor..." else if (resume?.hasValid() == true) "▶  Devam et" else "▶  Oynat",
                         primary = true, focusMe = playFr,
+                        onFocused = {
+                            if (it) scope.launch { detailListState.animateScrollToItem(0) }
+                        },
                         onClick = {
                             playNow(if (resume?.hasValid() == true) resume!!.posMs else 0L)
                         }
@@ -503,6 +508,7 @@ fun TvSeriesDetail(
     var season by remember { mutableIntStateOf(-1) }
     var loading by remember { mutableStateOf(false) }
     val playFr = remember { FocusRequester() }
+    val seriesListState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     LaunchedEffect(entry.id) {
         full = if (entry.episodes.isNotEmpty()) entry else null
@@ -547,6 +553,7 @@ fun TvSeriesDetail(
     Box(Modifier.fillMaxSize().background(Color(0xFF0B0B12))) {
         LazyColumn(
             Modifier.fillMaxSize(),
+            state = seriesListState,
             contentPadding = PaddingValues(start = 40.dp, end = 40.dp, top = 40.dp, bottom = 50.dp)
         ) {
             item {
@@ -589,6 +596,9 @@ fun TvSeriesDetail(
                     TvButton(
                         if (loading) "Yükleniyor..." else "▶  Oynat",
                         primary = true, focusMe = playFr,
+                        onFocused = {
+                            if (it) scope.launch { seriesListState.animateScrollToItem(0) }
+                        },
                         onClick = { if (allEps.isNotEmpty()) playIdx(if (nextIdx >= 0) nextIdx else 0) }
                     )
                     TvButton(

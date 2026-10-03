@@ -11,8 +11,8 @@ android {
         applicationId = "com.bayram.xqtvapp"
         minSdk = 24
         targetSdk = 34
-        versionCode = 38
-        versionName = "2.9.3"
+        versionCode = 39
+        versionName = "2.9.4"
     }
 
     flavorDimensions += "device"

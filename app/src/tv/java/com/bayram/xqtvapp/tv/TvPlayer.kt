@@ -158,7 +158,6 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
     var dayEpg by remember { mutableStateOf<List<EpgEntry>>(emptyList()) }
     val hiddenFr = remember { FocusRequester() }
     val playFr = remember { FocusRequester() }
-    var uiFocusGiven by remember { mutableStateOf(false) }
 
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
     val chId = currentCh?.id ?: req.resumeId
@@ -249,12 +248,10 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(showUi) {
-        // Odak sadece ilk acilista Oynat'a verilir; sonrasi kumandada kalir.
-        // (Her gosterimde odak calmak, haplar arasi gezintiyi bozuyordu.)
-        if (showUi && !uiFocusGiven) {
-            uiFocusGiven = true
+        // Arayuz her acildiginda odak Oynat'a doner; yoksa kumanda bosa duser.
+        if (showUi) {
             try { playFr.requestFocus() } catch (_: Exception) { }
-        } else if (!showUi) {
+        } else {
             try { hiddenFr.requestFocus() } catch (_: Exception) { }
         }
     }
@@ -640,7 +637,6 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
     var prefsApplied by remember(req) { mutableStateOf(false) }
     val hiddenFr = remember { FocusRequester() }
     val playFr = remember { FocusRequester() }
-    var uiFocusGiven by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         view.keepScreenOn = true
@@ -777,9 +773,8 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(showUi) {
-        // Odak sadece ilk acilista Oynat'a verilir; sonrasi kumandada kalir.
-        if (showUi && !ended && errorMsg == null && !uiFocusGiven) {
-            uiFocusGiven = true
+        // Arayuz her acildiginda odak Oynat'a doner; yoksa kumanda bosa duser.
+        if (showUi && !ended && errorMsg == null) {
             try { playFr.requestFocus() } catch (_: Exception) { }
         } else if (!showUi) {
             try { hiddenFr.requestFocus() } catch (_: Exception) { }
@@ -1225,6 +1220,7 @@ private fun TvSeekBar(frac: Float, posText: String, durText: String, onScrub: (L
         Box(
             Modifier.fillMaxWidth().height(34.dp)
                 .onFocusChanged { focused = it.isFocused }
+                .focusable()
                 .onPreviewKeyEvent {
                     // Tek basim tek adim, basili tutma = art arda KeyDown = surekli sarma
                     if (it.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false

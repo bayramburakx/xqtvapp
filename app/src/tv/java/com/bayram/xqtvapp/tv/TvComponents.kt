@@ -137,13 +137,17 @@ fun TvButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     focusMe: FocusRequester? = null,
+    onFocused: (Boolean) -> Unit = {},
     leading: @Composable (() -> Unit)? = null
 ) {
     var focused by remember { mutableStateOf(false) }
     Row(
         modifier = modifier
             .then(if (focusMe != null) Modifier.focusRequester(focusMe) else Modifier)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                onFocused(it.isFocused)
+            }
             .tvFocusRing(focused, 99.dp, 1.07f)
             .clip(RoundedCornerShape(99.dp))
             .background(if (primary) Color.White else PGlass)
