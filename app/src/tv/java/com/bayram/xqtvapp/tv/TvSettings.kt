@@ -355,8 +355,8 @@ private fun TvLockPanel() {
 private fun TvAboutPanel() {
     val ctx = LocalContext.current
     Column(Modifier.verticalScroll(rememberScrollState())) {
-        TvSettingRow(title = "Sürüm", value = "2.9.2 TV", onClick = {
-            tvToast(ctx, "Portio TV 2.9.2")
+        TvSettingRow(title = "Sürüm", value = "2.9.3 TV", onClick = {
+            tvToast(ctx, "Portio TV 2.9.3")
         })
         TvSettingRow(title = "Lisanslar ve gizlilik", value = "", onClick = {
             tvToast(ctx, "Portio TV · Tüm yayınların tek yerde")
@@ -565,6 +565,25 @@ fun TvSeriesDetail(
                 Spacer(Modifier.height(10.dp))
                 Text("${seasons.size} sezon • ${allEps.size} bölüm",
                     color = PTx2, fontSize = 17.sp)
+                // Konu + oyuncular (film detayindaki gibi)
+                val seriesPlot = full?.plot?.ifBlank { null }
+                    ?: allEps.firstOrNull { it.plot.isNotBlank() }?.plot
+                if (!seriesPlot.isNullOrBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(seriesPlot, fontSize = 16.sp, lineHeight = 24.sp,
+                        color = Color.White.copy(alpha = 0.9f),
+                        maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+                val seriesCast = remember(full) {
+                    (full?.cast ?: "").split(",").map { it.trim() }
+                        .filter { it.isNotEmpty() }.take(8)
+                }
+                if (seriesCast.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Oyuncular: " + seriesCast.joinToString(", "),
+                        color = PTx2, fontSize = 14.sp,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
                 Spacer(Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     TvButton(

@@ -404,18 +404,24 @@ private fun TvHeroSlider(slides: List<TvHeroSlide>) {
     val scope = rememberCoroutineScope()
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
     val pager = rememberPagerState(pageCount = { slides.size })
+    var heroFocused by remember { mutableStateOf(false) }
+    // Odak hero'dayken otomatik donme durur: sayfa degisip odak bosa dusmez
     LaunchedEffect(pager, slides.size) {
         while (slides.size > 1) {
             try {
                 delay(6000)
-                pager.animateScrollToPage((pager.currentPage + 1) % slides.size)
+                if (!heroFocused) {
+                    pager.animateScrollToPage((pager.currentPage + 1) % slides.size)
+                }
             } catch (_: Exception) { break }
         }
     }
-    Box(Modifier.fillMaxWidth().padding(top = 18.dp)) {
+    Box(
+        Modifier.fillMaxWidth().padding(top = 18.dp)
+            .onFocusChanged { heroFocused = it.hasFocus }
+    ) {
         HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth()) { i ->
             val s = slides[i % slides.size]
-            val playFr = remember { FocusRequester() }
             Box(
                 Modifier.fillMaxWidth().height(400.dp)
                     .clip(RoundedCornerShape(24.dp))
@@ -455,7 +461,7 @@ private fun TvHeroSlider(slides: List<TvHeroSlide>) {
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(18.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        TvButton("▶  Oynat", primary = true, focusMe = playFr, onClick = s.play)
+                        TvButton("▶  Oynat", primary = true, onClick = s.play)
                         TvButton(
                             if (s.favId != null && favs.contains(s.favId)) "✓ Listemde" else "+ Listem",
                             primary = false,
@@ -468,12 +474,8 @@ private fun TvHeroSlider(slides: List<TvHeroSlide>) {
                     }
                 }
             }
-            // Sayfa degisince Oynat odakta kalsin
-            LaunchedEffect(pager.currentPage) {
-                if (i == pager.currentPage) {
-                    try { playFr.requestFocus() } catch (_: Exception) { }
-                }
-            }
+            // Ilk odak ust sekmededir; asagi inince Oynat'a ulasilir.
+            // (Sayfa donuslerinde odak calinmaz.)
         }
         Row(
             Modifier.align(Alignment.BottomEnd).padding(end = 36.dp, bottom = 36.dp),
@@ -625,10 +627,13 @@ private fun TvLiveTab(
             }
         } catch (_: Exception) { }
     }
-    // Odaklanilan kanal icin gunluk akis (tek kanal, internet serbest)
+    // Odaklanilan kanal icin gunluk akis (tek kanal, internet serbest).
+    // Hizli gezinmede her satir icin istek yagmaz: 350ms duraklama beklenir.
     LaunchedEffect(selected?.id) {
         dayEpg = emptyList()
         val ch = selected ?: return@LaunchedEffect
+        delay(350)
+        if (selected?.id != ch.id) return@LaunchedEffect
         try {
             dayEpg = EpgXml.lookupDay(ctx, vis, ch, includeInternet = true)
         } catch (_: Exception) { }
@@ -665,12 +670,13 @@ private fun TvLiveTab(
                 itemsIndexed(list, key = { _, it -> it.id }) { idx, ch ->
                     val epg = nowMap[ch.id]
                     var focused by remember { mutableStateOf(false) }
-                    LaunchedEffect(focused) {
-                        if (focused) selectedId = ch.id
-                    }
                     Row(
                         Modifier.fillMaxWidth()
-                            .onFocusChanged { focused = it.isFocused }
+                            .onFocusChanged {
+                                focused = it.isFocused
+                                // Eszamanli secim: preview gecikmesiz takip eder
+                                if (it.isFocused) selectedId = ch.id
+                            }
                             .tvFocusRing(focused, 18.dp, 1.03f)
                             .clip(RoundedCornerShape(18.dp))
                             .background(Color(0xFF15151F))

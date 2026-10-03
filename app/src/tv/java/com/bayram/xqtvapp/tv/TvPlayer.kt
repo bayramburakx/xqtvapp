@@ -248,9 +248,12 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(showUi) {
-        if (showUi) {
+        // Odak sadece ilk acilista Oynat'a verilir; sonrasi kumandada kalir.
+        // (Her gosterimde odak calmak, haplar arasi gezintiyi bozuyordu.)
+        if (showUi && !uiFocusGiven) {
+            uiFocusGiven = true
             try { playFr.requestFocus() } catch (_: Exception) { }
-        } else {
+        } else if (!showUi) {
             try { hiddenFr.requestFocus() } catch (_: Exception) { }
         }
     }
@@ -309,10 +312,13 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
         Modifier.fillMaxSize().background(Color.Black)
             .onPreviewKeyEvent {
                 if (it.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
-                // Kumanda: sag/sol = kanal degistir (canlida sarma yok)
+                // Arayuz acikken oklar sadece odakta gezinir; kanal degismez.
+                // Arayuz kapaliyken: yukari/asagi = kanal, sag/sol = arayuzu acar.
+                if (showUi || errorMsg != null) return@onPreviewKeyEvent false
                 when (it.key) {
-                    Key.DirectionLeft -> { zapTo(currentIdx - 1); true }
-                    Key.DirectionRight -> { zapTo(currentIdx + 1); true }
+                    Key.DirectionUp -> { zapTo(currentIdx - 1); true }
+                    Key.DirectionDown -> { zapTo(currentIdx + 1); true }
+                    Key.DirectionLeft, Key.DirectionRight -> { poke(); true }
                     else -> false
                 }
             }
@@ -633,6 +639,7 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
     var prefsApplied by remember(req) { mutableStateOf(false) }
     val hiddenFr = remember { FocusRequester() }
     val playFr = remember { FocusRequester() }
+    var uiFocusGiven by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         view.keepScreenOn = true
@@ -769,7 +776,9 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
         }
     }
     LaunchedEffect(showUi) {
-        if (showUi && !ended && errorMsg == null) {
+        // Odak sadece ilk acilista Oynat'a verilir; sonrasi kumandada kalir.
+        if (showUi && !ended && errorMsg == null && !uiFocusGiven) {
+            uiFocusGiven = true
             try { playFr.requestFocus() } catch (_: Exception) { }
         } else if (!showUi) {
             try { hiddenFr.requestFocus() } catch (_: Exception) { }
@@ -798,10 +807,12 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
         Modifier.fillMaxSize().background(Color.Black)
             .onPreviewKeyEvent {
                 if (it.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
-                // Kumanda: sag/sol = ±10 sn (odak nerede olursa olsun)
+                // Arayuz acikken oklar sadece odakta gezinir (sarma calmaz).
+                // Sarma yalnizca sarma cubugu odaktayken olur; kapaliyken oklar arayuzu acar.
+                if (showUi || ended || errorMsg != null) return@onPreviewKeyEvent false
                 when (it.key) {
-                    Key.DirectionLeft -> { seekBy(-10_000); true }
-                    Key.DirectionRight -> { seekBy(10_000); true }
+                    Key.DirectionLeft, Key.DirectionRight,
+                    Key.DirectionUp, Key.DirectionDown -> { poke(); true }
                     else -> false
                 }
             }
@@ -891,15 +902,13 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
                     }
                 )
             }
-            // Orta: -10 / oynat / +10
+            // Orta: oynat (sarma: cubuk odaktayken sag/sol, basili tutunca surekli)
             Row(
                 Modifier.align(Alignment.Center),
                 horizontalArrangement = Arrangement.spacedBy(36.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TvSeekBtn("−10", "-10 sn") { seekBy(-10_000) }
                 TvPlayBtn(playing = playing, focusMe = playFr, onClick = { togglePlay() })
-                TvSeekBtn("+10", "+10 sn") { seekBy(10_000) }
             }
             // Alt bar: odaklanabilir sarma cubugu + haplar
             Column(
@@ -910,7 +919,8 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
                 TvSeekBar(
                     frac = if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f,
                     posText = fmtMs(pos),
-                    durText = fmtMs(dur)
+                    durText = fmtMs(dur),
+                    onScrub = { ms -> seekBy(ms) }
                 )
                 Spacer(Modifier.height(14.dp))
                 TvPillRow(
@@ -1098,11 +1108,6 @@ private fun TvZapBtn(symbol: String, name: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun TvSeekBtn(label: String, desc: String, onClick: () -> Unit) {
-    TvTextBtn("$label  $desc", onClick)
-}
-
-@Composable
 private fun TvTextBtn(label: String, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Box(
@@ -1210,14 +1215,24 @@ private fun TvThinProgress(frac: Float) {
     }
 }
 
-/** Odaklanabilir sarma cubugu: kumandayla uzerindeyken sag/sol sarar. */
+/** Odaklanabilir sarma cubugu: odaktayken sag/sol ±10 sn sarar,
+ *  basili tutunca KeyDown tekrarlariyla surekli sarar (Netflix tarzi). */
 @Composable
-private fun TvSeekBar(frac: Float, posText: String, durText: String) {
+private fun TvSeekBar(frac: Float, posText: String, durText: String, onScrub: (Long) -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Column {
         Box(
             Modifier.fillMaxWidth().height(34.dp)
                 .onFocusChanged { focused = it.isFocused }
+                .onPreviewKeyEvent {
+                    // Tek basim tek adim, basili tutma = art arda KeyDown = surekli sarma
+                    if (it.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (it.key) {
+                        Key.DirectionLeft -> { onScrub(-10_000); true }
+                        Key.DirectionRight -> { onScrub(10_000); true }
+                        else -> false
+                    }
+                }
                 .tvFocusRing(focused, 9.dp, 1.0f),
             contentAlignment = Alignment.CenterStart
         ) {
