@@ -17,6 +17,7 @@ val KEY_PREF_AUDIO = stringPreferencesKey("pref_audio")
 val KEY_PREF_SUB = stringPreferencesKey("pref_sub")
 val KEY_PREF_SUBSIZE = stringPreferencesKey("pref_subsize")
 val KEY_DEF_EPG = stringPreferencesKey("default_epg_url")
+private val KEY_HIDDEN_CATS = stringPreferencesKey("hidden_cats_v1")
 
 private const val FS = "\u001F"
 private const val RS = "\u001E"
@@ -209,5 +210,25 @@ object FavoritesStore {
 
     suspend fun setSubSize(ctx: Context, idx: Int) {
         ctx.dataStore.edit { it[KEY_PREF_SUBSIZE] = idx.toString() }
+    }
+
+    // ---------- kategori gizleme ----------
+    // Anahtar formati: "live:<tur>" | "movie:<tur>" | "series:<kategori>"
+
+    fun hiddenCatsFlow(ctx: Context): Flow<Set<String>> =
+        ctx.dataStore.data.map { prefs ->
+            (prefs[KEY_HIDDEN_CATS] ?: "").split(RS).filter { it.isNotBlank() }.toSet()
+        }
+
+    suspend fun setCatHidden(ctx: Context, key: String, hidden: Boolean) {
+        ctx.dataStore.edit { p ->
+            val cur = (p[KEY_HIDDEN_CATS] ?: "").split(RS).filter { it.isNotBlank() }.toMutableSet()
+            if (hidden) cur.add(key) else cur.remove(key)
+            p[KEY_HIDDEN_CATS] = cur.joinToString(RS)
+        }
+    }
+
+    suspend fun clearHiddenCats(ctx: Context) {
+        ctx.dataStore.edit { it[KEY_HIDDEN_CATS] = "" }
     }
 }

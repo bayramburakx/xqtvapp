@@ -375,6 +375,7 @@ fun HomeScreen(
     fun setTab(v: MainTab) { tabIdx = MainTab.entries.indexOf(v).coerceAtLeast(0) }
     val act = LocalContext.current as? Activity
     var lastBack by remember { mutableLongStateOf(0L) }
+    var showCats by remember { mutableStateOf(false) }
     BackHandler {
         val now = System.currentTimeMillis()
         if (now - lastBack < 2000) act?.finish()
@@ -396,7 +397,8 @@ fun HomeScreen(
                 MainTab.SERIES ->
                     SeriesTab(session, onSearch, onOpenSeries)
                 MainTab.SETTINGS ->
-                    SettingsTab(session, onRefresh, onSourceSwitch, onLogout)
+                    SettingsTab(session, onRefresh, onSourceSwitch, onLogout,
+                        onOpenCats = { showCats = true })
             }
         }
         // yuzen cam alt menu (opak + cizgili)
@@ -423,6 +425,10 @@ fun HomeScreen(
                         color = if (on) Color.White else PTx2)
                 }
             }
+        }
+        // Kategori yonetimi: alt menunun ustunu kaplayan tam ekran sayfa
+        if (showCats) {
+            CategoriesScreen(session = session, onClose = { showCats = false })
         }
     }
 }
@@ -475,6 +481,15 @@ fun DiscoverTab(
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
     val recents by FavoritesStore.recentFlow(ctx).collectAsState(initial = emptyList())
     val resumeMap by FavoritesStore.resumeFlow(ctx).collectAsState(initial = emptyMap())
+    val hidden by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
+    // Gizli kategoriler Ana Sayfa raflarinda da yok: gorunur kopya uzerinden calisilir
+    val vis = remember(session, hidden) {
+        session.copy(
+            channels = session.channels.filter { !isCatHidden(hidden, "live", it.genre) },
+            movies = session.movies.filter { !isCatHidden(hidden, "movie", it.genre) },
+            series = session.series.filter { !isCatHidden(hidden, "series", it.category) }
+        )
+    }
     var busy by remember { mutableStateOf<String?>(null) }
     var glowColor by remember { mutableStateOf(Color(0xFF4B35D6)) }
     val glowAnim by animateColorAsState(glowColor, animationSpec = tween(800), label = "homeGlow")
@@ -487,13 +502,13 @@ fun DiscoverTab(
                     val sc = StalkerClient(session.stalkerUrl, session.stalkerMac)
                     val url = sc.createLink(ch.cmd)
                     if (url.isNotBlank()) onPlayChannel(ch, url, null, sc.streamHeaders(),
-                        session.channels, session.channels.indexOfFirst { it.id == ch.id })
+                        vis.channels, vis.channels.indexOfFirst { it.id == ch.id })
                 } else {
                     val headers = if (session.xServer.isNotBlank())
                         mapOf("Referer" to session.xServer.trimEnd('/') + "/") else emptyMap()
                     val alt = if (ch.cmd.endsWith(".m3u8")) ch.cmd.dropLast(5) + ".ts" else null
                     onPlayChannel(ch, ch.cmd, alt, headers,
-                        session.channels, session.channels.indexOfFirst { it.id == ch.id })
+                        vis.channels, vis.channels.indexOfFirst { it.id == ch.id })
                 }
             } finally { busy = null }
         }
@@ -517,7 +532,7 @@ fun DiscoverTab(
             )
         }
         item {
-            HeroSlider(session, busyId = busy,
+            HeroSlider(vis, busyId = busy,
                 onGlow = { glowColor = it },
                 onOpenMovie = onOpenMovie, onOpenSeries = onOpenSeries,
                 onOpenLive = { openLive(it) })
@@ -537,9 +552,9 @@ fun DiscoverTab(
                             else -> r.genre
                         }
                         ContinueCard(r.name, sub, r.logo, prog) {
-                            val ch = session.channels.find { it.id == r.id }
-                                ?: session.movies.find { it.id == r.id } ?: r
-                            if (session.movies.any { it.id == ch.id }) onOpenMovie(ch) else openLive(ch)
+                            val ch = vis.channels.find { it.id == r.id }
+                                ?: vis.movies.find { it.id == r.id } ?: r
+                            if (vis.movies.any { it.id == ch.id }) onOpenMovie(ch) else openLive(ch)
                         }
                     }
                 }
@@ -547,20 +562,20 @@ fun DiscoverTab(
         }
 
         item { Spacer(Modifier.height(18.dp)) }
-        if (session.channels.isNotEmpty()) {
+        if (vis.channels.isNotEmpty()) {
             item {
-                SectionHead("Şimdi canlı", session.channels.size, "Rehber", onAction = {})
-                LiveRail(session, onPlay = { openLive(it) }, busyId = busy)
+                SectionHead("Şimdi canlı", vis.channels.size, "Rehber", onAction = {})
+                LiveRail(vis, onPlay = { openLive(it) }, busyId = busy)
             }
         }
 
         item { Spacer(Modifier.height(18.dp)) }
-        if (session.movies.isNotEmpty()) {
+        if (vis.movies.isNotEmpty()) {
             item {
-                SectionHead("Yeni filmler", session.movies.size, "Tümü", onAction = {})
+                SectionHead("Yeni filmler", vis.movies.size, "Tümü", onAction = {})
                 LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(session.movies.take(10), key = { it.id }) { m ->
+                    items(vis.movies.take(10), key = { it.id }) { m ->
                         PosterCard128(m.name, m.logo) { onOpenMovie(m) }
                     }
                 }
@@ -568,12 +583,12 @@ fun DiscoverTab(
         }
 
         item { Spacer(Modifier.height(18.dp)) }
-        if (session.series.isNotEmpty()) {
+        if (vis.series.isNotEmpty()) {
             item {
-                SectionHead("Popüler diziler", session.series.size, "Tümü", onAction = {})
+                SectionHead("Popüler diziler", vis.series.size, "Tümü", onAction = {})
                 LazyRow(contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(session.series.take(10), key = { it.id }) { s ->
+                    items(vis.series.take(10), key = { it.id }) { s ->
                         PosterCard128(s.name, s.cover) { onOpenSeries(s) }
                     }
                 }
@@ -856,6 +871,10 @@ fun ContinueCard(title: String, sub: String, logo: String, progress: Float, onCl
     }
 }
 
+/** Kategori gizleme filtresi: hidden icinde "live:X" / "movie:X" / "series:X" anahtarlari. */
+fun isCatHidden(hidden: Set<String>, kind: String, name: String) =
+    hidden.contains("$kind:$name")
+
 @Composable
 fun CatChips(cats: List<String>, selected: String, onSelect: (String) -> Unit) {
     LazyRow(contentPadding = PaddingValues(20.dp, 8.dp),
@@ -996,10 +1015,20 @@ fun ChannelCard(ch: StalkerChannel, busy: Boolean, isFav: Boolean, onFav: () -> 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MovieTab(session: Session, onSearch: (String) -> Unit, onOpenMovie: (StalkerChannel) -> Unit) {
+    val ctx = LocalContext.current
+    val hidden by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
     var cat by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("Tümü") }
-    val cats = remember(session) { listOf("Tümü") + session.movies.map { it.genre }.distinct().sorted() }
-    val list = remember(session, cat) {
-        if (cat == "Tümü") session.movies else session.movies.filter { it.genre == cat }
+    val cats = remember(session, hidden) {
+        listOf("Tümü") + session.movies.map { it.genre }.distinct()
+            .filter { !isCatHidden(hidden, "movie", it) }.sorted()
+    }
+    LaunchedEffect(cats, cat) {
+        if (cat != "Tümü" && !cats.contains(cat)) cat = "Tümü"
+    }
+    val list = remember(session, cat, hidden) {
+        session.movies.filter {
+            (cat == "Tümü" || it.genre == cat) && !isCatHidden(hidden, "movie", it.genre)
+        }
     }
     val feat = remember(list) { list.take(3) }
     val pager = rememberPagerState(pageCount = { feat.size.coerceAtLeast(1) })
@@ -1012,9 +1041,9 @@ fun MovieTab(session: Session, onSearch: (String) -> Unit, onOpenMovie: (Stalker
     }
     val shownList = remember(list, shown) { list.take(shown) }
     // "Tümü" modunda tur raflari: hepsini tek izgara yerine kesfet raflari
-    val genreRails = remember(session) {
-        if (session.movies.size < 20) emptyList()
-        else session.movies.groupBy { it.genre }
+    val genreRails = remember(list) {
+        if (list.size < 20) emptyList()
+        else list.groupBy { it.genre }
             .filter { it.value.size >= 4 }
             .toList().sortedByDescending { it.second.size }.take(4)
     }
@@ -1119,10 +1148,20 @@ fun MovieTab(session: Session, onSearch: (String) -> Unit, onOpenMovie: (Stalker
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SeriesTab(session: Session, onSearch: (String) -> Unit, onOpenSeries: (SeriesEntry) -> Unit) {
+    val ctx = LocalContext.current
+    val hidden by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
     var cat by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("Tümü") }
-    val cats = remember(session) { listOf("Tümü") + session.series.map { it.category }.distinct().sorted() }
-    val list = remember(session, cat) {
-        if (cat == "Tümü") session.series else session.series.filter { it.category == cat }
+    val cats = remember(session, hidden) {
+        listOf("Tümü") + session.series.map { it.category }.distinct()
+            .filter { !isCatHidden(hidden, "series", it) }.sorted()
+    }
+    LaunchedEffect(cats, cat) {
+        if (cat != "Tümü" && !cats.contains(cat)) cat = "Tümü"
+    }
+    val list = remember(session, cat, hidden) {
+        session.series.filter {
+            (cat == "Tümü" || it.category == cat) && !isCatHidden(hidden, "series", it.category)
+        }
     }
     val feat = remember(list) { list.take(3) }
     val pager = rememberPagerState(pageCount = { feat.size.coerceAtLeast(1) })
@@ -1133,9 +1172,9 @@ fun SeriesTab(session: Session, onSearch: (String) -> Unit, onOpenSeries: (Serie
         if (lastVis >= shown - 10 && shown < list.size) shown = (shown + 30).coerceAtMost(list.size)
     }
     val shownList = remember(list, shown) { list.take(shown) }
-    val catRails = remember(session) {
-        if (session.series.size < 12) emptyList()
-        else session.series.groupBy { it.category }
+    val catRails = remember(list) {
+        if (list.size < 12) emptyList()
+        else list.groupBy { it.category }
             .filter { it.value.size >= 3 }
             .toList().sortedByDescending { it.second.size }.take(4)
     }
@@ -1153,8 +1192,12 @@ fun SeriesTab(session: Session, onSearch: (String) -> Unit, onOpenSeries: (Serie
             }
         }
         CatChips(cats, cat) { cat = it }
-        if (session.series.isEmpty()) {
-            Text("Bu kaynakta dizi yok.", color = PTx2, modifier = Modifier.padding(20.dp))
+        if (list.isEmpty()) {
+            Text(
+                if (session.series.isEmpty()) "Bu kaynakta dizi yok."
+                else "Tüm kategoriler gizli.\nAyarlar > Kategoriler'den açabilirsin.",
+                color = PTx2, modifier = Modifier.padding(20.dp)
+            )
             return@Column
         }
         LazyVerticalGrid(
@@ -1239,13 +1282,15 @@ fun SettingsTab(
     session: Session,
     onRefresh: () -> Unit,
     onSourceSwitch: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onOpenCats: () -> Unit
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val autoplay by FavoritesStore.autoplayFlow(ctx).collectAsState(initial = true)
     val (audioPref, subPref) = FavoritesStore.trackPrefsFlow(ctx).collectAsState(initial = Pair("auto", "off")).value
     val defEpg by FavoritesStore.defaultEpgFlow(ctx).collectAsState(initial = "")
+    val hiddenCats by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
     var confirmDelete by remember { mutableStateOf(false) }
     var avDialog by remember { mutableStateOf(false) }
     var epgDialog by remember { mutableStateOf(false) }
@@ -1308,6 +1353,10 @@ fun SettingsTab(
                 epgDialog = true
             }
             SettingsRow("Kaynak değiştir", "Kayıtlı listeler") { onSourceSwitch() }
+            SettingsRow(
+                "Kategoriler",
+                if (hiddenCats.isEmpty()) "Tümü görünür" else "${hiddenCats.size} kategori gizli"
+            ) { onOpenCats() }
             if (!confirmDelete) {
                 SettingsRow("Kaynağı sil", "Bu cihazdan kaldır", danger = true) {
                     confirmDelete = true
@@ -1361,7 +1410,7 @@ fun SettingsTab(
                 )
             }
             Spacer(Modifier.height(20.dp))
-            Text("Portio v2.8.3 • Tüm yayınların tek yerde.",
+            Text("Portio v2.8.4 • Tüm yayınların tek yerde.",
                 color = PTx2, fontSize = 12.sp)
             if (avDialog) {
                 AlertDialog(
@@ -1397,6 +1446,92 @@ fun SettingsTab(
                     },
                     confirmButton = { TextButton(onClick = { avDialog = false }) { Text("Kapat") } }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun CategoriesScreen(session: Session, onClose: () -> Unit) {
+    BackHandler { onClose() }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val hidden by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
+
+    data class Kind(
+        val key: String, val title: String,
+        val cats: List<Pair<String, Int>>
+    )
+    val kinds = remember(session) {
+        listOf(
+            Kind("live", "Canlı TV",
+                session.channels.groupBy { it.genre }.map { (k, v) -> k to v.size }.sortedBy { it.first }),
+            Kind("movie", "Filmler",
+                session.movies.groupBy { it.genre }.map { (k, v) -> k to v.size }.sortedBy { it.first }),
+            Kind("series", "Diziler",
+                session.series.groupBy { it.category }.map { (k, v) -> k to v.size }.sortedBy { it.first })
+        )
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize().background(Color(0xFF0B0B12)),
+        contentPadding = PaddingValues(20.dp, 18.dp, 20.dp, 110.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(38.dp).clip(CircleShape).background(PGlass)
+                    .clickableNoRipple(onClose), contentAlignment = Alignment.Center) {
+                    Text("‹", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Kategoriler", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = (-1.5).sp)
+                    Text("Kapattıkların her yerde gizlenir",
+                        color = PTx2, fontSize = 14.sp)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            if (hidden.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = { scope.launch { FavoritesStore.clearHiddenCats(ctx) } },
+                    shape = RoundedCornerShape(99.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                ) { Text("Tümünü göster (${hidden.size} gizli)") }
+            } else {
+                Text("Tümü görünür", color = PTx2, fontSize = 13.sp,
+                    modifier = Modifier.padding(vertical = 6.dp))
+            }
+        }
+        kinds.forEach { kind ->
+            item {
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(kind.title, fontWeight = FontWeight.Bold, fontSize = 21.sp,
+                        letterSpacing = (-0.3).sp, modifier = Modifier.weight(1f))
+                    val visN = kind.cats.count { (n, _) -> !hidden.contains("${kind.key}:$n") }
+                    Text("$visN/${kind.cats.size} açık", color = PTx2, fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+            if (kind.cats.isEmpty()) {
+                item {
+                    Text("Bu kaynakta içerik yok.", color = PTx2, fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 6.dp))
+                }
+            } else {
+                kind.cats.forEach { (name, count) ->
+                    val key = "${kind.key}:$name"
+                    val visible = !hidden.contains(key)
+                    item(key = kind.key + name) {
+                        SettingsRow(
+                            title = name,
+                            sub = "$count içerik",
+                            check = visible,
+                            onCheck = { scope.launch { FavoritesStore.setCatHidden(ctx, key, !it) } }
+                        ) { scope.launch { FavoritesStore.setCatHidden(ctx, key, visible) } }
+                    }
+                }
             }
         }
     }
@@ -1455,7 +1590,9 @@ fun SearchScreen(
     onOpenSeries: (SeriesEntry) -> Unit
 ) {
     BackHandler { onClose() }
+    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val hidden by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
     var q by remember { mutableStateOf("") }
     // Arama debounce: her harfte filtre + liste yeniden kurma kasmayi onler
     var debounced by remember { mutableStateOf("") }
@@ -1516,17 +1653,23 @@ fun SearchScreen(
             return@Column
         }
         // Filtreler remember'da: her recompose'da yeniden filtre yok
-        val chs = remember(debounced, filter, session) {
+        val chs = remember(debounced, filter, session, hidden) {
             if (filter == "all" || filter == "live")
-                session.channels.filter { it.name.contains(debounced, true) }.take(30) else emptyList()
+                session.channels.filter {
+                    it.name.contains(debounced, true) && !isCatHidden(hidden, "live", it.genre)
+                }.take(30) else emptyList()
         }
-        val mvs = remember(debounced, filter, session) {
+        val mvs = remember(debounced, filter, session, hidden) {
             if (filter == "all" || filter == "movie")
-                session.movies.filter { it.name.contains(debounced, true) }.take(30) else emptyList()
+                session.movies.filter {
+                    it.name.contains(debounced, true) && !isCatHidden(hidden, "movie", it.genre)
+                }.take(30) else emptyList()
         }
-        val srs = remember(debounced, filter, session) {
+        val srs = remember(debounced, filter, session, hidden) {
             if (filter == "all" || filter == "series")
-                session.series.filter { it.name.contains(debounced, true) }.take(20) else emptyList()
+                session.series.filter {
+                    it.name.contains(debounced, true) && !isCatHidden(hidden, "series", it.category)
+                }.take(20) else emptyList()
         }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(8.dp, 8.dp, 8.dp, 20.dp)) {
             if (chs.isNotEmpty()) {

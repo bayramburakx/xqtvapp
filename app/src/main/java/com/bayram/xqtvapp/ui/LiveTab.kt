@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.bayram.xqtvapp.CatChips
 import com.bayram.xqtvapp.Session
+import com.bayram.xqtvapp.isCatHidden
 import com.bayram.xqtvapp.data.EpgCache
 import com.bayram.xqtvapp.data.EpgXml
 import com.bayram.xqtvapp.data.EpgEntry
@@ -68,19 +69,25 @@ fun TvTab(
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
+    val hidden by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
     var view by remember { mutableStateOf("list") } // list | epg
     var cat by remember { mutableStateOf("Tümü") }
     var busy by remember { mutableStateOf<String?>(null) }
     var lastCh by remember { mutableStateOf<StalkerChannel?>(null) }
 
-    val cats = remember(session) {
-        listOf("Tümü", "Favoriler") + session.channels.map { it.genre }.distinct().sorted()
+    val cats = remember(session, hidden) {
+        listOf("Tümü", "Favoriler") + session.channels.map { it.genre }.distinct()
+            .filter { !isCatHidden(hidden, "live", it) }.sorted()
     }
-    val list = remember(session, cat, favs) {
+    // Gizli kategoride takili kalmamak icin: secili kategori gizlenmisse Tümü'ne don
+    LaunchedEffect(cats, cat) {
+        if (cat != "Tümü" && cat != "Favoriler" && !cats.contains(cat)) cat = "Tümü"
+    }
+    val list = remember(session, cat, favs, hidden) {
         session.channels.filter {
             when (cat) {
-                "Tümü" -> true
-                "Favoriler" -> favs.contains(it.id)
+                "Tümü" -> !isCatHidden(hidden, "live", it.genre)
+                "Favoriler" -> favs.contains(it.id) && !isCatHidden(hidden, "live", it.genre)
                 else -> it.genre == cat
             }
         }
