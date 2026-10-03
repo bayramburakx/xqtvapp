@@ -231,4 +231,9 @@ object FavoritesStore {
     suspend fun clearHiddenCats(ctx: Context) {
         ctx.dataStore.edit { it[KEY_HIDDEN_CATS] = "" }
     }
+
+    /** Toplu gizle/goster: yuzlerce kategoride tek DataStore islemi. */
+    suspend fun replaceHiddenCats(ctx: Context, next: Set<String>) {
+        ctx.dataStore.edit { it[KEY_HIDDEN_CATS] = next.joinToString(RS) }
+    }
 }

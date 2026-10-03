@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -66,7 +67,9 @@ import com.bayram.xqtvapp.data.XtreamClient
 import com.bayram.xqtvapp.ui.AddSourceScreen
 import com.bayram.xqtvapp.ui.LoadingRingScreen
 import com.bayram.xqtvapp.ui.MovieDetailScreen
+import com.bayram.xqtvapp.ui.PAcc1
 import com.bayram.xqtvapp.ui.PBg
+import com.bayram.xqtvapp.ui.PBg2
 import com.bayram.xqtvapp.ui.PGlass
 import com.bayram.xqtvapp.ui.PLine
 import com.bayram.xqtvapp.ui.PLive
@@ -1410,7 +1413,7 @@ fun SettingsTab(
                 )
             }
             Spacer(Modifier.height(20.dp))
-            Text("Portio v2.8.4 • Tüm yayınların tek yerde.",
+            Text("Portio v2.8.5 • Tüm yayınların tek yerde.",
                 color = PTx2, fontSize = 12.sp)
             if (avDialog) {
                 AlertDialog(
@@ -1451,12 +1454,14 @@ fun SettingsTab(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CategoriesScreen(session: Session, onClose: () -> Unit) {
     BackHandler { onClose() }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val hidden by FavoritesStore.hiddenCatsFlow(ctx).collectAsState(initial = emptySet())
+    var q by remember { mutableStateOf("") }
 
     data class Kind(
         val key: String, val title: String,
@@ -1471,6 +1476,22 @@ fun CategoriesScreen(session: Session, onClose: () -> Unit) {
             Kind("series", "Diziler",
                 session.series.groupBy { it.category }.map { (k, v) -> k to v.size }.sortedBy { it.first })
         )
+    }
+    val allKeys = remember(kinds) { kinds.flatMap { k -> k.cats.map { (n, _) -> "${k.key}:$n" } }.toSet() }
+    // Arama: uc bolumde birden suzer
+    val shown = remember(kinds, q) {
+        val t = q.trim()
+        if (t.isBlank()) kinds
+        else kinds.map { k -> k.copy(cats = k.cats.filter { (n, _) -> n.contains(t, true) }) }
+    }
+    val matchCount = remember(shown) { shown.sumOf { it.cats.size } }
+
+    fun setAll(hide: Boolean) {
+        scope.launch {
+            FavoritesStore.replaceHiddenCats(
+                ctx, if (hide) allKeys else emptySet()
+            )
+        }
     }
 
     LazyColumn(
@@ -1487,50 +1508,106 @@ fun CategoriesScreen(session: Session, onClose: () -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text("Kategoriler", fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
                         letterSpacing = (-1.5).sp)
-                    Text("Kapattıkların her yerde gizlenir",
-                        color = PTx2, fontSize = 14.sp)
+                    Text(
+                        if (hidden.isEmpty()) "Tümü görünür"
+                        else "${hidden.size} kategori gizli",
+                        color = PTx2, fontSize = 14.sp
+                    )
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            if (hidden.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            // Arama (uygulamadaki diger arama alanlariyla ayni stil)
+            OutlinedTextField(
+                value = q, onValueChange = { q = it },
+                placeholder = { Text("Kategori ara...", color = PTx2, fontSize = 14.sp) },
+                leadingIcon = {
+                    Icon(Icons.Filled.Search, "Ara", tint = PTx2, modifier = Modifier.size(18.dp))
+                },
+                trailingIcon = {
+                    if (q.isNotEmpty()) {
+                        TextButton(onClick = { q = "" }) { Text("Temizle", color = PTx2, fontSize = 13.sp) }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = PBg2, focusedContainerColor = PBg2,
+                    unfocusedBorderColor = PLine, focusedBorderColor = PAcc1
+                )
+            )
+            Spacer(Modifier.height(10.dp))
+            // Toplu islem: 5 kategori de 500 kategori de iki dokunus
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
-                    onClick = { scope.launch { FavoritesStore.clearHiddenCats(ctx) } },
+                    onClick = { setAll(true) },
+                    enabled = hidden.size < allKeys.size,
                     shape = RoundedCornerShape(99.dp),
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
-                ) { Text("Tümünü göster (${hidden.size} gizli)") }
-            } else {
-                Text("Tümü görünür", color = PTx2, fontSize = 13.sp,
-                    modifier = Modifier.padding(vertical = 6.dp))
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) { Text("Tümünü kapat", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+                Button(
+                    onClick = { setAll(false) },
+                    enabled = hidden.isNotEmpty(),
+                    shape = RoundedCornerShape(99.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) { Text("Tümünü aç", color = Color.Black, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
             }
         }
-        kinds.forEach { kind ->
+        if (q.isNotBlank() && matchCount == 0) {
             item {
-                Spacer(Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(kind.title, fontWeight = FontWeight.Bold, fontSize = 21.sp,
-                        letterSpacing = (-0.3).sp, modifier = Modifier.weight(1f))
-                    val visN = kind.cats.count { (n, _) -> !hidden.contains("${kind.key}:$n") }
-                    Text("$visN/${kind.cats.size} açık", color = PTx2, fontSize = 13.sp)
-                }
-                Spacer(Modifier.height(4.dp))
+                Text("Sonuç yok.", color = PTx2, fontSize = 15.sp,
+                    modifier = Modifier.padding(vertical = 18.dp))
             }
-            if (kind.cats.isEmpty()) {
+        }
+        shown.forEach { kind ->
+            if (kind.cats.isNotEmpty()) {
                 item {
-                    Text("Bu kaynakta içerik yok.", color = PTx2, fontSize = 14.sp,
-                        modifier = Modifier.padding(vertical = 6.dp))
+                    // Baslik sayfa basligiyla hizali (hPad=0, izgara disi 20dp padding icinde)
+                    val openN = kind.cats.count { (n, _) -> !hidden.contains("${kind.key}:$n") }
+                    val allOpen = openN == kind.cats.size
+                    SectionHead(
+                        kind.title, openN,
+                        if (allOpen) "Kapat" else "Aç", hPad = 0.dp,
+                        onAction = {
+                            scope.launch {
+                                val keys = kind.cats.map { (n, _) -> "${kind.key}:$n" }.toSet()
+                                FavoritesStore.replaceHiddenCats(
+                                    ctx,
+                                    if (allOpen) hidden + keys else hidden - keys
+                                )
+                            }
+                        }
+                    )
                 }
-            } else {
-                kind.cats.forEach { (name, count) ->
-                    val key = "${kind.key}:$name"
-                    val visible = !hidden.contains(key)
-                    item(key = kind.key + name) {
-                        SettingsRow(
-                            title = name,
-                            sub = "$count içerik",
-                            check = visible,
-                            onCheck = { scope.launch { FavoritesStore.setCatHidden(ctx, key, !it) } }
-                        ) { scope.launch { FavoritesStore.setCatHidden(ctx, key, visible) } }
+                item {
+                    // Uygulamadaki cip dili: acik = beyaz, gizli = soluk cam
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        kind.cats.forEach { (name, count) ->
+                            val key = "${kind.key}:$name"
+                            val visible = !hidden.contains(key)
+                            FilterChip(
+                                selected = visible,
+                                onClick = {
+                                    scope.launch {
+                                        FavoritesStore.setCatHidden(ctx, key, visible)
+                                    }
+                                },
+                                label = { Text("$name · $count") },
+                                shape = RoundedCornerShape(99.dp),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color.White,
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = PGlass,
+                                    labelColor = PTx2
+                                )
+                            )
+                        }
                     }
+                    Spacer(Modifier.height(14.dp))
                 }
             }
         }

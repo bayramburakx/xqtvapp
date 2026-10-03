@@ -11,8 +11,8 @@ android {
         applicationId = "com.bayram.xqtvapp"
         minSdk = 24
         targetSdk = 34
-        versionCode = 32
-        versionName = "2.8.4"
+        versionCode = 33
+        versionName = "2.8.5"
     }
 
     buildTypes {
