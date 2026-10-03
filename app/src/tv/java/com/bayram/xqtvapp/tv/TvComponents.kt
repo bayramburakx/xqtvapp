@@ -118,12 +118,12 @@ fun TvChip(
             .background(if (selected) Color.White else PGlass)
             .border(1.dp, PLine, RoundedCornerShape(99.dp))
             .tvClickableNoRipple(onClick)
-            .padding(horizontal = 26.dp, vertical = 0.dp)
-            .height(52.dp),
+            .padding(horizontal = 22.dp, vertical = 0.dp)
+            .height(40.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
-            label, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+            label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
             color = if (selected) Color.Black else PTx2, maxLines = 1
         )
     }
@@ -149,8 +149,8 @@ fun TvButton(
             .background(if (primary) Color.White else PGlass)
             .border(1.dp, if (primary) Color.White else PLine, RoundedCornerShape(99.dp))
             .tvClickableNoRipple(onClick)
-            .padding(horizontal = 44.dp)
-            .height(72.dp),
+            .padding(horizontal = 34.dp)
+            .height(56.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
@@ -158,7 +158,7 @@ fun TvButton(
         if (leading != null) Spacer(Modifier.width(12.dp))
         Text(
             label,
-            fontSize = 26.sp, fontWeight = FontWeight.Bold,
+            fontSize = 18.sp, fontWeight = FontWeight.Bold,
             color = if (primary) Color.Black else Color.White
         )
     }
@@ -168,9 +168,9 @@ fun TvButton(
 @Composable
 fun TvSectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
-        text, fontSize = 34.sp, fontWeight = FontWeight.Bold,
+        text, fontSize = 22.sp, fontWeight = FontWeight.Bold,
         letterSpacing = (-0.5).sp, color = Color.White,
-        modifier = modifier.padding(top = 34.dp, bottom = 18.dp)
+        modifier = modifier.padding(top = 24.dp, bottom = 14.dp)
     )
 }
 
@@ -198,7 +198,26 @@ fun isAdultLabel(name: String): Boolean {
         t.contains("erotik") || t.contains("erotic") || t.contains("18+") || t.contains("+18")
 }
 
-/** Kumanda ipucu satiri (tasarimdaki #hint). */
+/** Sadece yildiz: favori isareti (odakta halka). */
+@Composable
+fun TvStarBtn(filled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        modifier = modifier
+            .onFocusChanged { focused = it.isFocused }
+            .tvFocusRing(focused, 32.dp, 1.1f)
+            .clip(CircleShape)
+            .background(Color(0x9E222230))
+            .tvClickableNoRipple(onClick)
+            .size(64.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "★", fontSize = 26.sp, fontWeight = FontWeight.Bold,
+            color = if (filled) Color(0xFFFFD60A) else Color.White
+        )
+    }
+}
 @Composable
 fun TvHint(modifier: Modifier = Modifier) {
     Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(22.dp)) {

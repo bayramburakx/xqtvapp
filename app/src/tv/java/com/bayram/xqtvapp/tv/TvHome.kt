@@ -2,7 +2,10 @@ package com.bayram.xqtvapp.tv
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,6 +81,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class TvTab(val title: String) {
@@ -272,7 +276,6 @@ private fun TvDiscoverTab(
     val scope = rememberCoroutineScope()
     val recents by FavoritesStore.recentFlow(ctx).collectAsState(initial = emptyList())
     val resumeMap by FavoritesStore.resumeFlow(ctx).collectAsState(initial = emptyMap())
-    var heroId by remember { mutableStateOf<String?>(null) }
     var epg by remember { mutableStateOf<Map<String, EpgEntry>>(emptyMap()) }
 
     // Canli ray EPG: sadece kaynak (isinma yok)
@@ -297,59 +300,32 @@ private fun TvDiscoverTab(
         } catch (_: Exception) { }
     }
 
-    val heroMovie = vis.movies.firstOrNull()
-    val hero = heroId?.let { id ->
-        vis.movies.find { it.id == id }?.let { Triple("Yeni eklendi", it.name, "Film • ${it.genre}") }
-            ?: vis.series.find { it.id == id }?.let { Triple("Dizi", it.name, "${it.category} • ${it.episodes.size} bölüm") }
-            ?: vis.channels.find { it.id == id }?.let { Triple("Canlı", it.name, it.genre) }
-    }
-    fun playHero() {
-        val id = heroId ?: heroMovie?.id ?: return
-        vis.movies.find { it.id == id }?.let(onOpenMovie)
-            ?: vis.series.find { it.id == id }?.let(onOpenSeries)
-            ?: vis.channels.find { it.id == id }?.let {
-                openTvLive(scope, vis, it, vis.channels.indexOf(it), onPlayChannel)
-            }
+    val slides = remember(vis) {
+        val out = mutableListOf<TvHeroSlide>()
+        vis.movies.take(2).forEach { m ->
+            out.add(TvHeroSlide("Yeni eklendi", m.name, "Film • ${m.genre}", m.logo,
+                { onOpenMovie(m) }, m.id))
+        }
+        vis.series.take(2).forEach { s ->
+            out.add(TvHeroSlide("Dizi", s.name,
+                "${s.category} • ${s.episodes.size} bölüm", s.cover,
+                { onOpenSeries(s) }, s.id))
+        }
+        vis.channels.take(1).forEach { c ->
+            out.add(TvHeroSlide("Canlı", c.name, c.genre, c.logo, {
+                openTvLive(scope, vis, c, vis.channels.indexOf(c), onPlayChannel)
+            }, c.id))
+        }
+        out
     }
 
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 40.dp, end = 40.dp, bottom = 50.dp)
     ) {
-        item {
-            // Hero
-            Column(Modifier.fillMaxWidth().padding(top = 26.dp)) {
-                Box(
-                    Modifier.clip(RoundedCornerShape(14.dp))
-                        .background(Color.White.copy(alpha = 0.16f))
-                        .padding(horizontal = 18.dp, vertical = 8.dp)
-                ) {
-                    Text(hero?.first ?: "Yeni eklendi", color = Color.White,
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.height(14.dp))
-                Text(
-                    hero?.second ?: heroMovie?.name ?: "Portio",
-                    fontSize = 52.sp, lineHeight = 54.sp, fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-2).sp, color = Color.White,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    hero?.third ?: (heroMovie?.let { "Film • ${it.genre}" } ?: ""),
-                    fontSize = 17.sp, color = PTx2
-                )
-                Spacer(Modifier.height(18.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    TvButton("▶  Oynat", primary = true, onClick = { playHero() })
-                    TvButton("+ Listem", primary = false, onClick = {
-                        heroId?.let { id ->
-                            vis.movies.find { it.id == id }?.let {
-                                scope.launch { FavoritesStore.toggle(ctx, it.id) }
-                            }
-                        }
-                    })
-                }
+        if (slides.isNotEmpty()) {
+            item {
+                TvHeroSlider(slides = slides)
             }
         }
         if (recents.isNotEmpty()) {
@@ -359,9 +335,7 @@ private fun TvDiscoverTab(
                     items(recents.take(8), key = { it.id }) { r ->
                         val ri = resumeMap[r.id]
                         val prog = if (ri != null && ri.durMs > 0) ri.posMs.toFloat() / ri.durMs else 0f
-                        TvContinueCard(r.name, r.logo, prog, onFocus = {
-                            if (it) heroId = r.id
-                        }) {
+                        TvContinueCard(r.name, r.logo, prog) {
                             val ch = vis.channels.find { m -> m.id == r.id }
                                 ?: vis.movies.find { m -> m.id == r.id }
                             if (ch != null) {
@@ -378,7 +352,7 @@ private fun TvDiscoverTab(
             item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     items(vis.channels.take(12), key = { it.id }) { ch ->
-                        TvLiveCard(ch, epg[ch.id], onFocus = { if (it) heroId = ch.id }) {
+                        TvLiveCard(ch, epg[ch.id]) {
                             openTvLive(scope, vis, ch, vis.channels.indexOf(ch), onPlayChannel)
                         }
                     }
@@ -390,7 +364,7 @@ private fun TvDiscoverTab(
             item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     items(vis.movies.take(12), key = { it.id }) { m ->
-                        TvPosterCard(m.name, m.logo, onFocus = { if (it) heroId = m.id }) {
+                        TvPosterCard(m.name, m.logo) {
                             onOpenMovie(m)
                         }
                     }
@@ -402,11 +376,122 @@ private fun TvDiscoverTab(
             item {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     items(vis.series.take(12), key = { it.id }) { s ->
-                        TvPosterCard(s.name, s.cover, onFocus = { if (it) heroId = s.id }) {
+                        TvPosterCard(s.name, s.cover) {
                             onOpenSeries(s)
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+private data class TvHeroSlide(
+    val badge: String,
+    val title: String,
+    val meta: String,
+    val art: String,
+    val play: () -> Unit,
+    val favId: String?
+)
+
+/** Devasa hero slider: fon posteri + otomatik donme + nokta gostergesi. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TvHeroSlider(slides: List<TvHeroSlide>) {
+    if (slides.isEmpty()) return
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val favs by FavoritesStore.favsFlow(ctx).collectAsState(initial = emptySet())
+    val pager = rememberPagerState(pageCount = { slides.size })
+    LaunchedEffect(pager, slides.size) {
+        while (slides.size > 1) {
+            try {
+                delay(6000)
+                pager.animateScrollToPage((pager.currentPage + 1) % slides.size)
+            } catch (_: Exception) { break }
+        }
+    }
+    Box(Modifier.fillMaxWidth().padding(top = 18.dp)) {
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth()) { i ->
+            val s = slides[i % slides.size]
+            val playFr = remember { FocusRequester() }
+            Box(
+                Modifier.fillMaxWidth().height(400.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(tileBrush(s.title))
+            ) {
+                if (s.art.isNotBlank()) {
+                    AsyncImage(model = s.art, contentDescription = null,
+                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+                Box(Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xE605050C)))
+                ))
+                Box(Modifier.fillMaxSize().background(
+                    Brush.horizontalGradient(
+                        listOf(Color(0xB305050C), Color.Transparent),
+                        startX = 0f, endX = 900f
+                    )
+                ))
+                Column(
+                    Modifier.align(Alignment.BottomStart).padding(36.dp)
+                        .fillMaxWidth(0.72f)
+                ) {
+                    Box(
+                        Modifier.clip(RoundedCornerShape(99.dp))
+                            .background(Color.White.copy(alpha = 0.16f))
+                            .padding(horizontal = 18.dp, vertical = 8.dp)
+                    ) {
+                        Text(s.badge, color = Color.White,
+                            fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(s.title, fontSize = 54.sp, lineHeight = 56.sp,
+                        fontWeight = FontWeight.ExtraBold, letterSpacing = (-2).sp,
+                        color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(8.dp))
+                    Text(s.meta, fontSize = 17.sp, color = Color.White.copy(alpha = 0.8f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(18.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        TvButton("▶  Oynat", primary = true, focusMe = playFr, onClick = s.play)
+                        TvButton(
+                            if (s.favId != null && favs.contains(s.favId)) "✓ Listemde" else "+ Listem",
+                            primary = false,
+                            onClick = {
+                                s.favId?.let { id ->
+                                    scope.launch { FavoritesStore.toggle(ctx, id) }
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+            // Sayfa degisince Oynat odakta kalsin
+            LaunchedEffect(pager.currentPage) {
+                if (i == pager.currentPage) {
+                    try { playFr.requestFocus() } catch (_: Exception) { }
+                }
+            }
+        }
+        Row(
+            Modifier.align(Alignment.BottomEnd).padding(end = 36.dp, bottom = 36.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            repeat(slides.size) { i ->
+                Box(
+                    Modifier
+                        .then(
+                            if (i == pager.currentPage) Modifier.size(28.dp, 8.dp)
+                            else Modifier.size(8.dp)
+                        )
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(
+                            if (i == pager.currentPage) Color.White
+                            else Color.White.copy(alpha = 0.4f)
+                        )
+                )
             }
         }
     }
@@ -560,9 +645,9 @@ private fun TvLiveTab(
     Column(Modifier.fillMaxSize().padding(horizontal = 40.dp)) {
         Row(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Text("Canlı TV", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold,
+            Text("Canlı TV", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold,
                 letterSpacing = (-1).sp, modifier = Modifier.weight(1f))
-            Text("${list.size} kanal", color = PTx2, fontSize = 15.sp)
+            Text("${list.size} kanal", color = PTx2, fontSize = 14.sp)
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             items(cats) { c ->
@@ -655,13 +740,13 @@ private fun TvLiveTab(
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Spacer(Modifier.height(16.dp))
                     } else Spacer(Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        TvButton("▶  Tam ekran izle", primary = true, onClick = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        TvButton("▶  Oynat", primary = true, onClick = {
                             openTvLive(scope, vis, ch, list.indexOf(ch), onPlayChannel)
                         })
-                        TvButton(
-                            if (favs.contains(ch.id)) "★ Favorilerde" else "☆ Favori",
-                            primary = false,
+                        TvStarBtn(
+                            filled = favs.contains(ch.id),
                             onClick = { scope.launch { FavoritesStore.toggle(ctx, ch.id) } }
                         )
                     }
@@ -690,9 +775,9 @@ private fun TvMediaGridTab(
     Column(Modifier.fillMaxSize().padding(horizontal = 40.dp)) {
         Row(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            Text(title, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold,
+            Text(title, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold,
                 letterSpacing = (-1).sp, modifier = Modifier.weight(1f))
-            Text("${ids.size} $unit", color = PTx2, fontSize = 15.sp)
+            Text("${ids.size} $unit", color = PTx2, fontSize = 14.sp)
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             items(allCats) { c ->

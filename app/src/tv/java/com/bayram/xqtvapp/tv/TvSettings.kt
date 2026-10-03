@@ -105,11 +105,11 @@ fun TvSettingsTab(
                         .background(if (sec == i) Color.White.copy(alpha = 0.12f) else Color.Transparent)
                         .tvClickableNoRipple { sec = i }
                         .padding(horizontal = 20.dp)
-                        .height(56.dp),
+                        .height(52.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        s, fontSize = 19.sp, fontWeight = FontWeight.SemiBold,
+                        s, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
                         color = if (sec == i || focused) Color.White else PTx2
                     )
                 }
@@ -151,12 +151,12 @@ private fun TvSettingRow(
                 if (check != null && onCheck != null) onCheck(!check) else onClick()
             }
             .padding(horizontal = 24.dp)
-            .height(62.dp),
+            .height(56.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, fontSize = 19.sp, color = Color.White, modifier = Modifier.weight(1f))
+        Text(title, fontSize = 17.sp, color = Color.White, modifier = Modifier.weight(1f))
         if (value.isNotBlank()) {
-            Text(value, color = PTx2, fontSize = 17.sp)
+            Text(value, color = PTx2, fontSize = 15.sp)
         }
         if (check != null && onCheck != null) {
             Spacer(Modifier.width(12.dp))
@@ -355,8 +355,8 @@ private fun TvLockPanel() {
 private fun TvAboutPanel() {
     val ctx = LocalContext.current
     Column(Modifier.verticalScroll(rememberScrollState())) {
-        TvSettingRow(title = "Sürüm", value = "2.9.1 TV", onClick = {
-            tvToast(ctx, "Portio TV 2.9.1")
+        TvSettingRow(title = "Sürüm", value = "2.9.2 TV", onClick = {
+            tvToast(ctx, "Portio TV 2.9.2")
         })
         TvSettingRow(title = "Lisanslar ve gizlilik", value = "", onClick = {
             tvToast(ctx, "Portio TV · Tüm yayınların tek yerde")
@@ -468,24 +468,6 @@ fun TvMovieDetail(
                         if (favs.contains(movie.id)) "✓ Listemde" else "+ Listem",
                         primary = false,
                         onClick = { scope.launch { FavoritesStore.toggle(ctx, movie.id) } }
-                    )
-                    TvButton(
-                        "Ses: ${prefs.first} · Altyazı: ${prefs.second}",
-                        primary = false,
-                        onClick = {
-                            val a = when (prefs.first) {
-                                "auto" -> "tr"
-                                "tr" -> "en"
-                                else -> "auto"
-                            }
-                            val s = when (prefs.second) {
-                                "off" -> "auto"
-                                "auto" -> "tr"
-                                "tr" -> "en"
-                                else -> "off"
-                            }
-                            scope.launch { FavoritesStore.setTrackPrefs(ctx, a, s) }
-                        }
                     )
                 }
             }
