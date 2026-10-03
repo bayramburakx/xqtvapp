@@ -11,8 +11,19 @@ android {
         applicationId = "com.bayram.xqtvapp"
         minSdk = 24
         targetSdk = 34
-        versionCode = 34
-        versionName = "2.8.6"
+        versionCode = 35
+        versionName = "2.9.0"
+    }
+
+    flavorDimensions += "device"
+    productFlavors {
+        create("phone") {
+            dimension = "device"
+        }
+        create("tv") {
+            dimension = "device"
+            applicationIdSuffix = ".tv"
+        }
     }
 
     buildTypes {

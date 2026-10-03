@@ -35,14 +35,18 @@ jobs:
           unzip -q gradle-8.7-bin.zip -d /tmp
           echo "/tmp/gradle-8.7/bin" >> $GITHUB_PATH
 
-      - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Build Debug APKs
+        run: gradle :app:assemblePhoneDebug :app:assembleTvDebug --no-daemon --stacktrace
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk xqtvapp-${{ github.ref_name }}.apk
+      - name: Rename APKs
+        run: |
+          cp app/build/outputs/apk/phone/debug/app-phone-debug.apk xqtvapp-${{ github.ref_name }}.apk
+          cp app/build/outputs/apk/tv/debug/app-tv-debug.apk xqtvapp-tv-${{ github.ref_name }}.apk
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          files: xqtvapp-${{ github.ref_name }}.apk
+          files: |
+            xqtvapp-${{ github.ref_name }}.apk
+            xqtvapp-tv-${{ github.ref_name }}.apk
           generate_release_notes: true

@@ -212,6 +212,32 @@ object FavoritesStore {
         ctx.dataStore.edit { it[KEY_PREF_SUBSIZE] = idx.toString() }
     }
 
+    // ---------- TV tercihleri (TV arayuzu kullanir, telefona dokunmaz) ----------
+    private val KEY_TV_RESUME = booleanPreferencesKey("tv_resume")
+    private val KEY_TV_PLAY_LAST = booleanPreferencesKey("tv_play_last")
+    private val KEY_HIDE_ADULT = booleanPreferencesKey("hide_adult")
+
+    fun tvResumeFlow(ctx: Context): Flow<Boolean> =
+        ctx.dataStore.data.map { it[KEY_TV_RESUME] ?: true }
+
+    suspend fun setTvResume(ctx: Context, v: Boolean) {
+        ctx.dataStore.edit { it[KEY_TV_RESUME] = v }
+    }
+
+    fun tvPlayLastFlow(ctx: Context): Flow<Boolean> =
+        ctx.dataStore.data.map { it[KEY_TV_PLAY_LAST] ?: true }
+
+    suspend fun setTvPlayLast(ctx: Context, v: Boolean) {
+        ctx.dataStore.edit { it[KEY_TV_PLAY_LAST] = v }
+    }
+
+    fun hideAdultFlow(ctx: Context): Flow<Boolean> =
+        ctx.dataStore.data.map { it[KEY_HIDE_ADULT] ?: false }
+
+    suspend fun setHideAdult(ctx: Context, v: Boolean) {
+        ctx.dataStore.edit { it[KEY_HIDE_ADULT] = v }
+    }
+
     // ---------- kategori gizleme ----------
     // Anahtar formati: "live:<tur>" | "movie:<tur>" | "series:<kategori>"
 

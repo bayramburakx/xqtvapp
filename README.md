@@ -5,7 +5,8 @@ Profesyonel Stalker/Minist portal player. Portal URL + MAC ile giriş yapar, han
 ## Kurulum
 1. Bu repoyu GitHub'a pushla
 2. Actions sekmesi > Build APK > Run workflow
-3. Artifact olarak `xqtvapp-debug-apk` indir
+3. Artifact olarak `xqtvapp-phone-apk` (telefon) ve `xqtvapp-tv-apk` (Android TV) indir
+4. Release'lerde her iki APK da eklenir: `xqtvapp-vX.Y.Z.apk` ve `xqtvapp-tv-vX.Y.Z.apk`
 
 ## Kullanım
 - Portal URL: `http://host:port/c/` formatında gir (sonunda / olsun)
