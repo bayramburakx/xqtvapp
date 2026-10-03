@@ -1515,7 +1515,7 @@ fun CategoriesScreen(session: Session, onClose: () -> Unit) {
     // Alt bar istatistikleri (3 sekme toplam): secili ulke + gorunur icerik
     val selCountries = remember(groupsAll, hidden) {
         groupsAll.flatMap { gl -> gl.filter { cg -> cg.subs.any { s -> s.keys.any { isOn(it) } } } }
-            .map { it.code } }.toSet()
+            .map { it.code }.toSet()
     }
     val visTotals = remember(groupsAll, hidden, tabs) {
         tabs.mapIndexed { i, t ->
