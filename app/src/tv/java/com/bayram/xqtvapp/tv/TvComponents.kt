@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -61,6 +62,7 @@ fun TvAppTheme(content: @Composable () -> Unit) {
 }
 
 /** Kumanda odagi halkasi: odaklaninca buyur + beyaz cerceve (tasarimdaki gibi). */
+@Composable
 fun Modifier.tvFocusRing(focused: Boolean, corner: Dp = 18.dp, scale: Float = 1.06f): Modifier {
     val s by animateFloatAsState(if (focused) scale else 1f, label = "tvScale")
     return this
@@ -68,12 +70,13 @@ fun Modifier.tvFocusRing(focused: Boolean, corner: Dp = 18.dp, scale: Float = 1.
         .then(if (focused) Modifier.border(4.dp, Color.White, RoundedCornerShape(corner)) else Modifier)
 }
 
-fun Modifier.tvClickableNoRipple(onClick: () -> Unit): Modifier =
+fun Modifier.tvClickableNoRipple(onClick: () -> Unit): Modifier = composed {
     clickable(
         interactionSource = remember { MutableInteractionSource() },
         indication = null,
         onClick = onClick
     )
+}
 
 /** Odaklanabilir kart: D-pad ile gezilir, odakta halka + buyume gosterir. */
 @Composable

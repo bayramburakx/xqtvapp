@@ -210,7 +210,7 @@ fun TvHomeScreen(
                 TvTab.MOVIES -> TvMediaGridTab(
                     title = "Filmler", unit = "film",
                     cats = vis.movies.map { it.genre }.distinct().sorted(),
-                    items = vis.movies associate { it.id to (it.name to it.logo) },
+                    items = vis.movies.associate { it.id to (it.name to it.logo) },
                     itemsByCat = { c -> vis.movies.filter { it.genre == c }.map { it.id } },
                     onOpen = { id -> vis.movies.find { it.id == id }?.let(onOpenMovie) }
                 )
@@ -232,6 +232,7 @@ fun TvHomeScreen(
             Modifier.align(Alignment.BottomEnd).padding(end = 40.dp, bottom = 14.dp)
         )
     }
+    } // dis Box
 }
 
 /** Kumandayla canli acilis (Stalker link cozumu dahil). */
