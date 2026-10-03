@@ -228,10 +228,10 @@ fun TvHomeScreen(
                 )
             }
         }
-        TvHint(
-            Modifier.align(Alignment.BottomEnd).padding(end = 40.dp, bottom = 14.dp)
-        )
-    }
+    } // Column
+    TvHint(
+        Modifier.align(Alignment.BottomEnd).padding(end = 40.dp, bottom = 14.dp)
+    )
     } // dis Box
 }
 

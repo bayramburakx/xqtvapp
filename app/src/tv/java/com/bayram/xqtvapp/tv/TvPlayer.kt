@@ -591,7 +591,7 @@ private fun TvCircleBtn(
         modifier = Modifier.size(64.dp)
             .then(if (focusFirst) Modifier.focusRequester(fr) else Modifier)
             .onFocusChanged { focused = it.isFocused }
-            .tvFocusRing(focused, CircleShape, 1.1f)
+            .tvFocusRing(focused, 32.dp, 1.1f)
             .clip(CircleShape)
             .background(Color(0x9E222230))
     ) {
