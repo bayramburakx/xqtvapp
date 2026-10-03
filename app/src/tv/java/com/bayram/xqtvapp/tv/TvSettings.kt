@@ -355,8 +355,8 @@ private fun TvLockPanel() {
 private fun TvAboutPanel() {
     val ctx = LocalContext.current
     Column(Modifier.verticalScroll(rememberScrollState())) {
-        TvSettingRow(title = "Sürüm", value = "2.9.5 TV", onClick = {
-            tvToast(ctx, "Portio TV 2.9.5")
+        TvSettingRow(title = "Sürüm", value = "2.9.6 TV", onClick = {
+            tvToast(ctx, "Portio TV 2.9.6")
         })
         TvSettingRow(title = "Lisanslar ve gizlilik", value = "", onClick = {
             tvToast(ctx, "Portio TV · Tüm yayınların tek yerde")

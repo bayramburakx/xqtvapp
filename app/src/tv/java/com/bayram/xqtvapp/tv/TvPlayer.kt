@@ -618,6 +618,7 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
     var trackTick by remember { mutableIntStateOf(0) }
     var countdown by remember { mutableIntStateOf(-1) }
     var seekFlash by remember { mutableStateOf<String?>(null) }
+    var seekTarget by remember { mutableLongStateOf(0L) }
     var lastSeekAt by remember { mutableLongStateOf(0L) }
     var resumeToast by remember { mutableStateOf(req.startMs > 10_000L) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
@@ -782,10 +783,13 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
         poke()
     }
     fun seekBy(ms: Long) {
-        exo?.seekTo(((exo?.currentPosition ?: 0L) + ms).coerceAtLeast(0L))
+        // Sarma arayuzu ACMAZ: art arda basildiginda beklenmez.
+        val target = ((exo?.currentPosition ?: 0L) + ms).coerceAtLeast(0L)
+        exo?.seekTo(target)
+        pos = target
         val s = kotlin.math.abs(ms) / 1000
         seekFlash = (if (ms < 0) "−" else "+") + "${s} sn"
-        poke()
+        seekTarget = target
     }
 
     /** Tek basim ±10 sn; basili tutunca (<350ms aralik) ±30 sn adimla akar. */
@@ -806,9 +810,10 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
     Box(
         Modifier.fillMaxSize().background(Color.Black)
             .onPreviewKeyEvent {
-                if (it.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
+                // Basili tutma = art arda KeyDown: KeyUp beklenirse hold hic sarmaz.
+                if (it.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 // Panel aciksa ya da arayuz aciksa oklar sadece odakta gezinir.
-                // Arayuz kapaliyken: sag/sol = hemen ±10 sn sar + arayuzu acar.
+                // Arayuz kapaliyken: sag/sol = hemen ±10 sn sar (arayuz acilmaz).
                 if (vodPanelsOpen || ended || errorMsg != null) return@onPreviewKeyEvent false
                 if (showUi) return@onPreviewKeyEvent false
                 when (it.key) {
@@ -841,15 +846,21 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
                 CircularProgressIndicator(color = Color.White, modifier = Modifier.size(54.dp))
             }
         }
-        // Sarma geri bildirimi
+        // Sarma geri bildirimi (hedef zamanla)
         seekFlash?.let { side ->
             Box(
                 Modifier.align(if (side.startsWith("−")) Alignment.CenterStart else Alignment.CenterEnd)
-                    .padding(horizontal = 60.dp).size(120.dp)
-                    .clip(CircleShape).background(Color.White.copy(alpha = 0.18f)),
+                    .padding(horizontal = 60.dp)
+                    .clip(CircleShape).background(Color.White.copy(alpha = 0.18f))
+                    .padding(horizontal = 28.dp, vertical = 20.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(side, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(side, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(fmtMs(seekTarget), color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
         // Devam bildirimi
