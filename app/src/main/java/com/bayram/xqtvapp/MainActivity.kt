@@ -1592,7 +1592,7 @@ fun CategoriesScreen(session: Session, onClose: () -> Unit) {
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    listOf(
+                    val quicks: List<Pair<String, () -> Unit>> = listOf(
                         "Sadece ABD" to { onlyCountry("US", groupsAll, allKeys, ctx, scope) },
                         "Sadece Türkiye" to { onlyCountry("TR", groupsAll, allKeys, ctx, scope) },
                         "Tümünü seç" to {
@@ -1601,7 +1601,8 @@ fun CategoriesScreen(session: Session, onClose: () -> Unit) {
                         "Temizle" to {
                             scope.launch { FavoritesStore.replaceHiddenCats(ctx, allKeys) }
                         }
-                    ).forEach { (label, fn) ->
+                    )
+                    quicks.forEach { (label, fn) ->
                         OutlinedButton(
                             onClick = fn,
                             shape = RoundedCornerShape(99.dp),
