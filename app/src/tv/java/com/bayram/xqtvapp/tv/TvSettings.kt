@@ -355,8 +355,8 @@ private fun TvLockPanel() {
 private fun TvAboutPanel() {
     val ctx = LocalContext.current
     Column(Modifier.verticalScroll(rememberScrollState())) {
-        TvSettingRow(title = "Sürüm", value = "2.9.4 TV", onClick = {
-            tvToast(ctx, "Portio TV 2.9.4")
+        TvSettingRow(title = "Sürüm", value = "2.9.5 TV", onClick = {
+            tvToast(ctx, "Portio TV 2.9.5")
         })
         TvSettingRow(title = "Lisanslar ve gizlilik", value = "", onClick = {
             tvToast(ctx, "Portio TV · Tüm yayınların tek yerde")
@@ -386,6 +386,7 @@ fun TvMovieDetail(
     val detailListState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     LaunchedEffect(movie.id) {
+        try { playFr.requestFocus() } catch (_: Exception) { }
         detail = null
         if (session.xServer.isNotEmpty() && movie.id.startsWith("vod_")) {
             try {
@@ -511,6 +512,7 @@ fun TvSeriesDetail(
     val seriesListState = androidx.compose.foundation.lazy.rememberLazyListState()
 
     LaunchedEffect(entry.id) {
+        try { playFr.requestFocus() } catch (_: Exception) { }
         full = if (entry.episodes.isNotEmpty()) entry else null
         if (full == null && session.xServer.isNotEmpty()) {
             loading = true

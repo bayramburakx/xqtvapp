@@ -222,8 +222,13 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
     }
     DisposableEffect(exo) { onDispose { try { exo?.release() } catch (_: Exception) { } } }
 
-    LaunchedEffect(showUi, playing) {
-        if (showUi && playing) {
+    // Panel/sayfa acikken otomatik gizleme ve odak calisma durur:
+    // yoksa kanallar panelinde gezinirken tuslar alta duser.
+    val livePanelsOpen = showChannels || showProgram || showTracks ||
+        showQuality || showMore || showTimer
+
+    LaunchedEffect(showUi, playing, livePanelsOpen) {
+        if (showUi && playing && !livePanelsOpen) {
             delay(5000)
             showUi = false
         }
@@ -247,18 +252,18 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
             sleepMin = 0
         }
     }
-    LaunchedEffect(showUi) {
-        // Arayuz her acildiginda odak Oynat'a doner; yoksa kumanda bosa duser.
-        if (showUi) {
+    LaunchedEffect(showUi, livePanelsOpen) {
+        // Arayuz her acildiginda odak Oynat'a doner; panel aciksa dokunulmaz.
+        if (showUi && !livePanelsOpen) {
             try { playFr.requestFocus() } catch (_: Exception) { }
-        } else {
+        } else if (!showUi && !livePanelsOpen) {
             try { hiddenFr.requestFocus() } catch (_: Exception) { }
         }
     }
 
     fun poke() { showUi = true }
 
-    fun applyZap(ch: StalkerChannel, idx: Int, url: String, alt: String?, headers: Map<String, String>) {
+    fun applyZap(ch: StalkerChannel, idx: Int, url: String, alt: String?, headers: Map<String, String>, quiet: Boolean) {
         currentCh = ch
         currentIdx = idx
         currentUrl = url
@@ -268,10 +273,11 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
         dayEpg = emptyList()
         osd = ch.name
         retryKey++
-        poke()
+        // Tustan zap sessizdir: overlay acilmaz, bekleme olmaz. Buton/panelden acilis gosterir.
+        if (!quiet) poke()
     }
 
-    fun zapTo(idx: Int) {
+    fun zapTo(idx: Int, quiet: Boolean = false) {
         val list = req.zap
         if (list.isEmpty() || zapping) return
         val i = ((idx % list.size) + list.size) % list.size
@@ -284,15 +290,15 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
                 if (req.stalkerUrl.isNotBlank()) {
                     val sc = StalkerClient(req.stalkerUrl, req.stalkerMac)
                     val url = sc.createLink(target.cmd)
-                    if (url.isNotBlank()) applyZap(target, i, url, null, sc.streamHeaders())
+                    if (url.isNotBlank()) applyZap(target, i, url, null, sc.streamHeaders(), quiet)
                 } else {
                     val alt = if (target.cmd.endsWith(".m3u8")) target.cmd.dropLast(5) + ".ts" else null
                     val headers = if (req.xServer.isNotBlank())
                         mapOf("Referer" to req.xServer.trimEnd('/') + "/") else emptyMap()
                     if (i == req.zapIndex && req.altUrl != null) {
-                        applyZap(target, i, req.url, req.altUrl, req.headers)
+                        applyZap(target, i, req.url, req.altUrl, req.headers, quiet)
                     } else {
-                        applyZap(target, i, target.cmd, alt, headers)
+                        applyZap(target, i, target.cmd, alt, headers, quiet)
                     }
                 }
             } catch (_: Exception) { buffering = false }
@@ -310,12 +316,12 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
         Modifier.fillMaxSize().background(Color.Black)
             .onPreviewKeyEvent {
                 if (it.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
-                // Arayuz acikken oklar sadece odakta gezinir; kanal degismez.
-                // Arayuz kapaliyken: yukari/asagi = kanal, sag/sol = arayuzu acar.
-                if (showUi || errorMsg != null) return@onPreviewKeyEvent false
+                // Panel/sayfa aciksa ya da arayuz aciksa oklar sadece odakta gezinir.
+                // Arayuz kapaliyken: yukari/asagi = sessiz kanal, sag/sol = arayuzu acar.
+                if (showUi || livePanelsOpen || errorMsg != null) return@onPreviewKeyEvent false
                 when (it.key) {
-                    Key.DirectionUp -> { zapTo(currentIdx - 1); true }
-                    Key.DirectionDown -> { zapTo(currentIdx + 1); true }
+                    Key.DirectionUp -> { zapTo(currentIdx - 1, quiet = true); true }
+                    Key.DirectionDown -> { zapTo(currentIdx + 1, quiet = true); true }
                     Key.DirectionLeft, Key.DirectionRight -> { poke(); true }
                     else -> false
                 }
@@ -404,30 +410,16 @@ private fun TvLivePlayer(req: PlayReq, onBack: () -> Unit) {
                     }
                 )
             }
-            // Orta: onceki / oynat / sonraki
+            // Orta: oynat (kanal degistirme kumanda tuslarinda)
             Row(
                 Modifier.align(Alignment.Center),
                 horizontalArrangement = Arrangement.spacedBy(30.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (req.zap.isNotEmpty()) {
-                    TvZapBtn(
-                        "▲",
-                        req.zap.getOrNull((currentIdx - 1 + req.zap.size) % req.zap.size)?.name ?: "",
-                        onClick = { zapTo(currentIdx - 1); poke() }
-                    )
-                }
                 TvPlayBtn(playing = playing, focusMe = playFr, onClick = {
                     if (playing) exo?.pause() else exo?.play()
                     poke()
                 })
-                if (req.zap.isNotEmpty()) {
-                    TvZapBtn(
-                        "▼",
-                        req.zap.getOrNull((currentIdx + 1) % req.zap.size)?.name ?: "",
-                        onClick = { zapTo(currentIdx + 1); poke() }
-                    )
-                }
             }
             // Alt bar
             Column(
@@ -626,6 +618,7 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
     var trackTick by remember { mutableIntStateOf(0) }
     var countdown by remember { mutableIntStateOf(-1) }
     var seekFlash by remember { mutableStateOf<String?>(null) }
+    var lastSeekAt by remember { mutableLongStateOf(0L) }
     var resumeToast by remember { mutableStateOf(req.startMs > 10_000L) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     val autoplay by FavoritesStore.autoplayFlow(ctx).collectAsState(initial = true)
@@ -743,8 +736,10 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
             delay(500)
         }
     }
-    LaunchedEffect(showUi, playing) {
-        if (showUi && playing && !ended) {
+    val vodPanelsOpen = showEpisodes || showTracks || showSpeed || showQuality || showAspect
+
+    LaunchedEffect(showUi, playing, vodPanelsOpen) {
+        if (showUi && playing && !ended && !vodPanelsOpen) {
             delay(5000)
             showUi = false
         }
@@ -772,11 +767,11 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
             retryKey++
         }
     }
-    LaunchedEffect(showUi) {
-        // Arayuz her acildiginda odak Oynat'a doner; yoksa kumanda bosa duser.
-        if (showUi && !ended && errorMsg == null) {
+    LaunchedEffect(showUi, vodPanelsOpen) {
+        // Arayuz her acildiginda odak Oynat'a doner; panel aciksa dokunulmaz.
+        if (showUi && !ended && errorMsg == null && !vodPanelsOpen) {
             try { playFr.requestFocus() } catch (_: Exception) { }
-        } else if (!showUi) {
+        } else if (!showUi && !vodPanelsOpen) {
             try { hiddenFr.requestFocus() } catch (_: Exception) { }
         }
     }
@@ -788,8 +783,17 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
     }
     fun seekBy(ms: Long) {
         exo?.seekTo(((exo?.currentPosition ?: 0L) + ms).coerceAtLeast(0L))
-        seekFlash = if (ms < 0) "−10 sn" else "+10 sn"
+        val s = kotlin.math.abs(ms) / 1000
+        seekFlash = (if (ms < 0) "−" else "+") + "${s} sn"
         poke()
+    }
+
+    /** Tek basim ±10 sn; basili tutunca (<350ms aralik) ±30 sn adimla akar. */
+    fun seekAdaptive(dir: Int) {
+        val now = System.currentTimeMillis()
+        val step = if (now - lastSeekAt < 350) 30_000L else 10_000L
+        lastSeekAt = now
+        seekBy(dir * step)
     }
     fun playEpisode(idx: Int) {
         val ep = req.episodes.getOrNull(idx) ?: return
@@ -803,11 +807,13 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
         Modifier.fillMaxSize().background(Color.Black)
             .onPreviewKeyEvent {
                 if (it.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
-                // Arayuz acikken oklar sadece odakta gezinir (sarma calmaz).
-                // Sarma yalnizca sarma cubugu odaktayken olur; kapaliyken oklar arayuzu acar.
-                if (showUi || ended || errorMsg != null) return@onPreviewKeyEvent false
+                // Panel aciksa ya da arayuz aciksa oklar sadece odakta gezinir.
+                // Arayuz kapaliyken: sag/sol = hemen ±10 sn sar + arayuzu acar.
+                if (vodPanelsOpen || ended || errorMsg != null) return@onPreviewKeyEvent false
+                if (showUi) return@onPreviewKeyEvent false
                 when (it.key) {
-                    Key.DirectionLeft, Key.DirectionRight,
+                    Key.DirectionLeft -> { seekAdaptive(-1); true }
+                    Key.DirectionRight -> { seekAdaptive(1); true }
                     Key.DirectionUp, Key.DirectionDown -> { poke(); true }
                     else -> false
                 }
@@ -916,7 +922,7 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
                     frac = if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f,
                     posText = fmtMs(pos),
                     durText = fmtMs(dur),
-                    onScrub = { ms -> seekBy(ms) }
+                    onScrub = { ms -> if (ms < 0) seekAdaptive(-1) else seekAdaptive(1) }
                 )
                 Spacer(Modifier.height(14.dp))
                 TvPillRow(
@@ -1076,30 +1082,6 @@ private fun TvPlayBtn(playing: Boolean, focusMe: FocusRequester, onClick: () -> 
     ) {
         Icon(if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, null,
             tint = Color.Black, modifier = Modifier.size(40.dp))
-    }
-}
-
-@Composable
-private fun TvZapBtn(symbol: String, name: String, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .onFocusChanged { focused = it.isFocused }
-            .tvFocusRing(focused, 32.dp, 1.08f)
-            .clip(CircleShape)
-            .background(Color(0x9E222230))
-            .tvClickableNoRipple(onClick)
-            .size(72.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(symbol, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-    }
-    if (name.isNotBlank()) {
-        Spacer(Modifier.height(6.dp))
-        Text(name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(110.dp))
     }
 }
 
@@ -1415,7 +1397,17 @@ private fun TvChannelPanel(
     onClose: () -> Unit
 ) {
     BackHandler { onClose() }
-    val listFr = remember { FocusRequester() }
+    // Panel mevcut kanalda acilir: hem kaydirilir hem odak oradadir.
+    // Degisim yalnizca ortaya basilinca olur (hover degistirmez).
+    val curPos = channels.indexOfFirst { it.id == currentId }.takeIf { it >= 0 } ?: 0
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val curFr = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        try {
+            if (curPos > 2) listState.scrollToItem((curPos - 2).coerceAtLeast(0))
+            curFr.requestFocus()
+        } catch (_: Exception) { }
+    }
     Box(Modifier.fillMaxSize().background(Color(0x80000000))) {
         Column(
             Modifier.fillMaxHeight().width(420.dp).align(Alignment.CenterEnd)
@@ -1425,19 +1417,14 @@ private fun TvChannelPanel(
         ) {
             Text("Kanallar", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold,
                 modifier = Modifier.padding(6.dp, 0.dp, 6.dp, 12.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(channels.take(100).size) { pos ->
                     val ch = channels[pos]
                     val idx = channels.indexOfFirst { it.id == ch.id }
                     var focused by remember { mutableStateOf(false) }
-                    if (pos == 0) {
-                        LaunchedEffect(Unit) {
-                            try { listFr.requestFocus() } catch (_: Exception) { }
-                        }
-                    }
                     Row(
                         Modifier.fillMaxWidth()
-                            .then(if (pos == 0) Modifier.focusRequester(listFr) else Modifier)
+                            .then(if (pos == curPos) Modifier.focusRequester(curFr) else Modifier)
                             .onFocusChanged { focused = it.isFocused }
                             .tvFocusRing(focused, 16.dp, 1.03f)
                             .clip(RoundedCornerShape(16.dp))
@@ -1471,10 +1458,6 @@ private fun TvChannelPanel(
                 }
             }
         }
-    }
-    // panele girince ilk satir odakta
-    LaunchedEffect(Unit) {
-        try { listFr.requestFocus() } catch (_: Exception) { }
     }
 }
 
