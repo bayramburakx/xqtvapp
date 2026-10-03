@@ -321,7 +321,7 @@ object EpgXml {
         val f = cacheFile(ctx, m3uUrl)
         try {
             if (f.exists()) {
-                val d = gson.fromJson<Dump>(f.readText(), type)
+                val d: Dump = f.bufferedReader().use { r -> gson.fromJson(r, type) }
                 if (System.currentTimeMillis() - d.savedAt < TTL_MS) {
                     synchronized(mem) { mem[m3uUrl] = d }
                     return@withContext d
@@ -334,7 +334,9 @@ object EpgXml {
             val data = downloadCapped(tvg)
             if (data != null) {
                 dump = dumpFromById(parseXml(data))
-                try { f.writeText(gson.toJson(dump)) } catch (_: Exception) { }
+                try {
+                    f.bufferedWriter().use { w -> gson.toJson(dump, w) }
+                } catch (_: Exception) { }
             }
         }
         synchronized(mem) { mem[m3uUrl] = dump }
@@ -348,7 +350,7 @@ object EpgXml {
         val f = File(ctx.filesDir, "portio_epg_" + (xmlUrl.hashCode().toUInt().toString(16)) + ".json")
         try {
             if (f.exists()) {
-                val d = gson.fromJson<Dump>(f.readText(), type)
+                val d: Dump = f.bufferedReader().use { r -> gson.fromJson(r, type) }
                 if (System.currentTimeMillis() - d.savedAt < TTL_MS) {
                     synchronized(mem) { mem[key] = d }
                     return d
@@ -359,7 +361,11 @@ object EpgXml {
         val data = withContext(Dispatchers.IO) { downloadCapped(xmlUrl) }
         if (data != null) {
             dump = dumpFromById(parseXml(data))
-            try { withContext(Dispatchers.IO) { f.writeText(gson.toJson(dump)) } } catch (_: Exception) { }
+            try {
+                withContext(Dispatchers.IO) {
+                    f.bufferedWriter().use { w -> gson.toJson(dump, w) }
+                }
+            } catch (_: Exception) { }
         }
         synchronized(mem) { mem[key] = dump }
         return dump

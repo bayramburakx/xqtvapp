@@ -29,14 +29,21 @@ object ContentCache {
             try {
                 val f = file(ctx, key)
                 if (!f.exists()) return@withContext null
-                gson.fromJson(f.readText(), CachedPayload::class.java)
+                // readText() dev dosyayi tek String yapip OOM'a goturuyordu (ozellikle TV box);
+                // akisla okunur.
+                f.bufferedReader().use { r ->
+                    gson.fromJson(r, CachedPayload::class.java)
+                }
             } catch (_: Exception) { null }
         }
 
     suspend fun save(ctx: Context, key: String, payload: CachedPayload) {
         try {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                file(ctx, key).writeText(gson.toJson(payload))
+                // toJson(String) + writeText 2x bellek sisirir; akisla yazilir.
+                file(ctx, key).bufferedWriter().use { w ->
+                    gson.toJson(payload, w)
+                }
             }
         } catch (_: Exception) { }
     }
