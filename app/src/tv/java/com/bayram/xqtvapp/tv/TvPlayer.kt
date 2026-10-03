@@ -4,6 +4,7 @@ import android.util.TypedValue
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -873,7 +874,7 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
                     .padding(40.dp, 22.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TvCircleBtn(Icons.Filled.ArrowBack) { goBack() }
+                TvCircleBtn(Icons.Filled.ArrowBack, onClick = { goBack() })
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(displayTitle, color = Color.White, fontWeight = FontWeight.Bold,
@@ -881,11 +882,14 @@ private fun TvVodPlayer(req: PlayReq, onBack: () -> Unit) {
                     if (hasSeries) Text(req.seriesTitle, color = Color.White.copy(alpha = 0.7f),
                         fontSize = 14.sp, maxLines = 1)
                 }
-                TvCircleBtn(if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp) {
-                    muted = !muted
-                    exo?.volume = if (muted) 0f else 1f
-                    poke()
-                }
+                TvCircleBtn(
+                    if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
+                    onClick = {
+                        muted = !muted
+                        exo?.volume = if (muted) 0f else 1f
+                        poke()
+                    }
+                )
             }
             // Orta: -10 / oynat / +10
             Row(
@@ -1119,8 +1123,8 @@ private fun TvTextBtn(label: String, onClick: () -> Unit) {
 private fun TvPillBtn(
     label: String,
     primary: Boolean,
-    onClick: () -> Unit,
-    focusMe: FocusRequester? = null
+    focusMe: FocusRequester? = null,
+    onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
     Box(
@@ -1260,7 +1264,7 @@ private fun TvSheet(title: String, onClose: () -> Unit, content: @Composable Col
 private fun TvSheetRow(
     title: String,
     sub: String,
-    on: Boolean,
+    on: Boolean = false,
     focusFirst: Boolean = false,
     trailing: String = "",
     onClick: () -> Unit
@@ -1305,7 +1309,7 @@ private fun TvSheetRow(
 
 /** TV ses/ altyazi sayfasi (odak ilk satirda baslar). */
 @Composable
-private fun TvTrackSheet(exo: Player, tick: Int, subSize: Int, onSubSize: (Int) -> Unit, onClose: () -> Unit) {
+private fun TvTrackSheet(exo: Player, tick: Int, subSize: Int = 1, onSubSize: ((Int) -> Unit)? = null, onClose: () -> Unit) {
     androidx.compose.runtime.key(tick) {
         data class Opt(val gi: Int, val ti: Int, val label: String, val selected: Boolean)
         val audio = mutableListOf<Opt>()
@@ -1336,9 +1340,9 @@ private fun TvTrackSheet(exo: Player, tick: Int, subSize: Int, onSubSize: (Int) 
             audio.forEachIndexed { i, o ->
                 TvSheetRow(o.label, "", o.selected, focusFirst = i == 0 && !firstFocusDone) {
                     firstFocusDone = true
-                    val group = exo.currentTracks.groups[o.groupIdx].mediaTrackGroup
+                    val group = exo.currentTracks.groups[o.gi].mediaTrackGroup
                     exo.trackSelectionParameters = params.buildUpon()
-                        .setOverrideForType(TrackSelectionOverride(group, listOf(o.trackIdx)))
+                        .setOverrideForType(TrackSelectionOverride(group, listOf(o.ti)))
                         .build()
                     onClose()
                 }
@@ -1354,14 +1358,15 @@ private fun TvTrackSheet(exo: Player, tick: Int, subSize: Int, onSubSize: (Int) 
             }
             text.forEach { o ->
                 TvSheetRow(o.label, "", o.selected) {
-                    val group = exo.currentTracks.groups[o.groupIdx].mediaTrackGroup
+                    val group = exo.currentTracks.groups[o.gi].mediaTrackGroup
                     exo.trackSelectionParameters = params.buildUpon()
                         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                        .setOverrideForType(TrackSelectionOverride(group, listOf(o.trackIdx)))
+                        .setOverrideForType(TrackSelectionOverride(group, listOf(o.ti)))
                         .build()
                     onClose()
                 }
             }
+            if (onSubSize != null) {
             Text("Altyazı boyutu", fontWeight = FontWeight.Bold, fontSize = 15.sp,
                 modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1382,6 +1387,7 @@ private fun TvTrackSheet(exo: Player, tick: Int, subSize: Int, onSubSize: (Int) 
                             color = if (subSize == i) Color.Black else PTx2)
                     }
                 }
+            }
             }
             Spacer(Modifier.height(10.dp))
         }

@@ -498,7 +498,7 @@ private fun TvHeroSlider(slides: List<TvHeroSlide>) {
 }
 
 @Composable
-private fun TvContinueCard(title: String, art: String, progress: Float, onFocus: (Boolean) -> Unit, onClick: () -> Unit) {
+private fun TvContinueCard(title: String, art: String, progress: Float, onFocus: (Boolean) -> Unit = {}, onClick: () -> Unit) {
     TvFocusCard(onClick = onClick, onFocused = onFocus,
         modifier = Modifier.size(210.dp, 118.dp), corner = 16.dp) {
         Box(Modifier.fillMaxSize().background(tileBrush(title))) {
@@ -522,7 +522,7 @@ private fun TvContinueCard(title: String, art: String, progress: Float, onFocus:
 }
 
 @Composable
-private fun TvLiveCard(ch: StalkerChannel, epg: EpgEntry?, onFocus: (Boolean) -> Unit, onClick: () -> Unit) {
+private fun TvLiveCard(ch: StalkerChannel, epg: EpgEntry?, onFocus: (Boolean) -> Unit = {}, onClick: () -> Unit) {
     TvFocusCard(onClick = onClick, onFocused = onFocus,
         modifier = Modifier.size(210.dp, 118.dp), corner = 16.dp) {
         Column(
